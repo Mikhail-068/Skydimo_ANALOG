@@ -105,83 +105,44 @@ internal sealed class LedPreview : Control
         var rail = RectangleF.FromLTRB(monitor.Left - 12 * scale, monitor.Top - 12 * scale,
             monitor.Right + 12 * scale, monitor.Bottom);
         ambient.Draw(g, stage, rail, pixels);
-        DrawLight(g, LedPositions(monitor, 12 * scale), scale);
         DrawMonitor(g, monitor, scale);
         g.Restore(canvas);
     }
 
-    private void DrawLight(Graphics g, PointF[] positions, float scale)
-    {
-        var colors = pixels.Select(LightColor).ToArray();
-        using var track = new Pen(Color.FromArgb(43, 51, 55), 3.5f * scale)
-        {
-            StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round
-        };
-        g.DrawLines(track, positions);
-        if (colors.All(color => color.ToArgb() == colors[0].ToArgb()))
-        {
-            if (colors[0].ToArgb() != Color.Black.ToArgb())
-            {
-                PaintUniformLight(g, positions, colors[0], 7 * scale, 44);
-                PaintUniformLight(g, positions, colors[0], 2.5f * scale, 238);
-            }
-            return;
-        }
-        DrawLightPass(g, positions, colors, 8 * scale, 52);
-        DrawLightPass(g, positions, colors, 2.5f * scale, 232);
-    }
-
-    private static void PaintUniformLight(Graphics g, PointF[] positions, Color color, float width, int opacity)
-    {
-        using var pen = new Pen(Color.FromArgb(opacity, color), width)
-        {
-            StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round
-        };
-        g.DrawLines(pen, positions);
-    }
-
-    private static void DrawLightPass(Graphics g, PointF[] positions, Color[] colors, float width, int opacity)
-    {
-        using var pen = new Pen(Color.Transparent, width) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-        for (var i = 1; i < positions.Length; i++)
-        {
-            var first = colors[i - 1];
-            var next = colors[i];
-            if (first.ToArgb() == Color.Black.ToArgb() && next.ToArgb() == Color.Black.ToArgb())
-                continue;
-
-            using var bridge = new LinearGradientBrush(positions[i - 1], positions[i],
-                first.ToArgb() == Color.Black.ToArgb() ? Color.FromArgb(0, next) : Color.FromArgb(opacity, first),
-                next.ToArgb() == Color.Black.ToArgb() ? Color.FromArgb(0, first) : Color.FromArgb(opacity, next));
-            pen.Brush = bridge;
-            g.DrawLine(pen, positions[i - 1], positions[i]);
-        }
-    }
-
-    private static Color LightColor(Rgb rgb)
-    {
-        static int Highlight(int channel) => Math.Min(255, (int)(channel * 1.93));
-        var preview = rgb.PreviewColor;
-        return Color.FromArgb(Highlight(preview.R), Highlight(preview.G), Highlight(preview.B));
-    }
-
     private void DrawMonitor(Graphics g, RectangleF monitor, float scale)
     {
-        using var pedestal = new Pen(Color.FromArgb(116, 125, 132), 1.35f * scale);
-        var center = monitor.Left + monitor.Width / 2;
-        var foot = monitor.Bottom + 22 * scale;
-        g.DrawLine(pedestal, center, monitor.Bottom, center, foot);
-        g.DrawLine(pedestal, center - 35 * scale, foot, center + 35 * scale, foot);
-        WindowStyle.Satin(g, monitor, 10 * scale, Color.FromArgb(176, 196, 218), Color.FromArgb(73, 97, 129), Color.FromArgb(122, 130, 136));
+        DrawStand(g, monitor, scale);
 
-        var surface = RectangleF.Inflate(monitor, -3 * scale, -3 * scale);
-        WindowStyle.Satin(g, surface, 7 * scale, Color.FromArgb(35, 57, 82), Color.FromArgb(22, 34, 53), Color.FromArgb(15, 18, 20));
-        using var face = WindowStyle.RoundedPath(surface, 7 * scale);
+        var depth = monitor;
+        depth.Offset(2 * scale, 3 * scale);
+        WindowStyle.Satin(g, depth, 6 * scale, Color.FromArgb(27, 32, 38),
+            Color.FromArgb(6, 8, 11), Color.FromArgb(10, 13, 16));
+        WindowStyle.Satin(g, monitor, 5 * scale, Color.FromArgb(59, 66, 74),
+            Color.FromArgb(29, 35, 42), Color.FromArgb(106, 119, 133));
+
+        var surface = RectangleF.FromLTRB(monitor.Left + 4 * scale, monitor.Top + 4 * scale,
+            monitor.Right - 4 * scale, monitor.Bottom - 11 * scale);
+        WindowStyle.Satin(g, surface, 2 * scale, Color.FromArgb(24, 38, 55),
+            Color.FromArgb(10, 16, 25), Color.FromArgb(5, 8, 12));
+        using var diode = new SolidBrush(Color.FromArgb(167, 204, 225));
+        g.FillEllipse(diode, monitor.Right - 17 * scale, monitor.Bottom - 6 * scale, 4 * scale, 2 * scale);
+
+        using var face = WindowStyle.RoundedPath(surface, 2 * scale);
         var clipped = g.Save();
         g.SetClip(face);
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
         if (pixels.Any(pixel => pixel != default))
             g.DrawImage(spill, surface);
+        using var reflection = new LinearGradientBrush(surface, Color.FromArgb(0, 193, 215, 235),
+            Color.FromArgb(29, 193, 215, 235), 315f);
+        g.FillPolygon(reflection,
+        [
+            new PointF(surface.Left + surface.Width * .44f, surface.Top),
+            new PointF(surface.Right, surface.Top),
+            new PointF(surface.Right, surface.Bottom),
+            new PointF(surface.Left + surface.Width * .72f, surface.Bottom)
+        ]);
+
         var margin = 16 * scale;
         var row = 18 * scale;
         var rows = Math.Min(Code.Length, Math.Max(1, (int)((surface.Height - 45 * scale) / row)));
@@ -209,6 +170,36 @@ internal sealed class LedPreview : Control
     }
 
 
+    private static void DrawStand(Graphics g, RectangleF monitor, float scale)
+    {
+        var center = monitor.Left + monitor.Width / 2;
+        var baseY = monitor.Bottom + 30 * scale;
+        var shadow = new RectangleF(center - 92 * scale, baseY - 7 * scale, 184 * scale, 31 * scale);
+        using var shadowPath = new GraphicsPath();
+        shadowPath.AddEllipse(shadow);
+        using var shade = new PathGradientBrush(shadowPath)
+        {
+            CenterColor = Color.FromArgb(205, 0, 0, 0),
+            SurroundColors = [Color.Transparent]
+        };
+        g.FillPath(shade, shadowPath);
+
+        var neck = new RectangleF(center - 9 * scale, monitor.Bottom - 4 * scale, 18 * scale, 39 * scale);
+        using var metal = new LinearGradientBrush(neck, Color.FromArgb(79, 89, 101),
+            Color.FromArgb(23, 29, 36), LinearGradientMode.Horizontal);
+        g.FillRectangle(metal, neck);
+        using var lip = new Pen(Color.FromArgb(116, 128, 142), scale);
+        var baseTop = new RectangleF(center - 61 * scale, baseY, 122 * scale, 15 * scale);
+        var baseEdge = baseTop;
+        baseEdge.Offset(0, 4 * scale);
+        using var edge = new SolidBrush(Color.FromArgb(11, 15, 20));
+        g.FillEllipse(edge, baseEdge);
+        using var top = new LinearGradientBrush(baseTop, Color.FromArgb(79, 89, 102),
+            Color.FromArgb(27, 33, 41), LinearGradientMode.Vertical);
+        g.FillEllipse(top, baseTop);
+        g.DrawArc(lip, baseTop, 14, 152);
+    }
+
     private void DrawCounts(Graphics g, int inset, float scale)
     {
         var bounds = RectangleF.FromLTRB(inset, Height - 111 * scale, Width - inset, Height - 76 * scale);
@@ -222,21 +213,6 @@ internal sealed class LedPreview : Control
                 g.DrawLine(pen, cell.Left, cell.Top + 8 * scale, cell.Left, cell.Bottom - 8 * scale);
             DrawText(g, names[i], wallLabel, Rectangle.Round(cell), WindowStyle.Muted, TextFormatFlags.HorizontalCenter);
         }
-    }
-
-    private static PointF[] LedPositions(RectangleF screen, float offset)
-    {
-        var result = new PointF[Sk0127.Count];
-        for (var i = 0; i < result.Length; i++)
-        {
-            var cell = Sk0127.Cells[i];
-            if (i >= Sk0127.Rows && i < Sk0127.Rows + Sk0127.Columns)
-                result[i] = new PointF(screen.Left + screen.Width * cell.X / (Sk0127.Columns - 1), screen.Top - offset);
-            else
-                result[i] = new PointF(i < Sk0127.Rows ? screen.Left - offset : screen.Right + offset,
-                    screen.Top + screen.Height * cell.Y / (Sk0127.Rows - 1));
-        }
-        return result;
     }
 
     private static void DrawText(Graphics g, string text, Font font, Rectangle bounds, Color color, TextFormatFlags alignment) =>

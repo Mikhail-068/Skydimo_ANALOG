@@ -15,6 +15,19 @@ internal sealed class MainWindow : Form
     private readonly Label brightnessValue = Label("", 15, color: Silver, font: "Bahnschrift");
     private readonly Label powerState = Label("", 9, color: Muted);
     private readonly ConnectionBadge badge = new();
+    private readonly ConnectionBadge screenLamp = new()
+    {
+        AccessibleName = "Синяя лампа режима «Цвета экрана»",
+        LitGlass = (Color.FromArgb(135, 200, 255), Color.FromArgb(25, 75, 186), Color.FromArgb(20, 57, 134)),
+        UnlitGlass = (Color.FromArgb(31, 49, 81), Color.FromArgb(11, 19, 35), Color.FromArgb(55, 80, 125))
+    };
+    private readonly ConnectionBadge colorLamp = new()
+    {
+        AccessibleName = "Красная лампа выбора цвета",
+        BlinkWhenLit = true,
+        LitGlass = (Color.FromArgb(255, 145, 126), Color.FromArgb(168, 30, 34), Color.FromArgb(120, 26, 29)),
+        UnlitGlass = (Color.FromArgb(81, 30, 35), Color.FromArgb(34, 12, 16), Color.FromArgb(125, 54, 59))
+    };
     private readonly Label status = Label("", 9, color: Muted);
     private readonly Label captureStatus = Label("", 9, color: Muted);
     private readonly TableLayoutPanel colors = Table(3);
@@ -110,24 +123,42 @@ internal sealed class MainWindow : Form
 
     private Control BuildHeader()
     {
-        var header = SingleRow(3);
+        var header = SingleRow(5);
         header.BackColor = Background;
-        header.Padding = new Padding(1, 0, 0, 15);
+        header.Padding = new Padding(1, 0, 0, 0);
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 183));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 99));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
         var title = Table(1);
         AddRow(title, Label("Подсветка монитора", 27, color: Silver, font: "Bahnschrift"), 40);
         header.Controls.Add(title, 0, 0);
 
         badge.Margin = new Padding(0, 0, 10, 0);
         badge.Anchor = AnchorStyles.Left | AnchorStyles.Right;
-        badge.Height = 32;
-        badge.AccessibleName = "Состояние подключения";
+        badge.Height = 50;
+        badge.AccessibleName = "Зелёная лампа режима «Один цвет»";
         header.Controls.Add(badge, 1, 0);
-        var log = new StudioButton("Журнал", "Открыть журнал") { Height = 32, Anchor = AnchorStyles.Left | AnchorStyles.Right };
-        log.Click += (_, _) => OpenLog();
-        header.Controls.Add(log, 2, 0);
+        var amber = new ConnectionBadge
+        {
+            Margin = badge.Margin, Anchor = badge.Anchor, Height = badge.Height,
+            AccessibleName = "Жёлтая лампа переключения",
+            LitGlass = (Color.FromArgb(255, 231, 139), Color.FromArgb(176, 92, 13), Color.FromArgb(124, 64, 12)),
+            UnlitGlass = (Color.FromArgb(85, 52, 22), Color.FromArgb(34, 20, 9), Color.FromArgb(131, 81, 34))
+        };
+        colorLamp.Margin = badge.Margin;
+        colorLamp.Anchor = badge.Anchor;
+        colorLamp.Height = badge.Height;
+        drive.MotionChanged += (_, _) => amber.UpdateStatus(
+            drive.IsMoving ? "Жёлтая лампа горит" : "Жёлтая лампа выключена",
+            drive.IsMoving, drive.IsMoving);
+        screenLamp.Margin = badge.Margin;
+        screenLamp.Anchor = badge.Anchor;
+        screenLamp.Height = badge.Height;
+        header.Controls.Add(screenLamp, 2, 0);
+        header.Controls.Add(amber, 3, 0);
+        header.Controls.Add(colorLamp, 4, 0);
         return header;
     }
 
@@ -179,7 +210,12 @@ internal sealed class MainWindow : Form
     private void BindActions()
     {
         Shown += (_, _) => ActiveControl = drive;
-        drive.ValueChanged += (_, _) => Changed();
+        drive.ValueChanged += (_, _) =>
+        {
+            var choosing = drive.ChoosingColor;
+            colorLamp.UpdateStatus(choosing ? "Выбор цвета" : "Выбор цвета закрыт", choosing, choosing);
+            Changed();
+        };
         monitor.SelectionChanged += (_, _) => Changed();
         reverse.CheckedChanged += (_, _) => Changed();
         brightness.ValueChanged += (_, _) => Changed();
@@ -240,8 +276,10 @@ internal sealed class MainWindow : Form
             monitor.RefreshDisplays(monitor.SelectedDisplay?.DeviceName);
         preview.SetFrame(engine.Preview);
         var link = engine.Status;
-        badge.UpdateStatus(link.Connected ? "Подключено" :
-            !drive.IsOn ? "Выключено" : "Поиск контроллера", link.Connected, drive.IsOn);
+        var screenMode = drive.Mode == LightMode.Screen;
+        var modeStatus = !drive.IsOn ? "Выключено" : !link.Connected ? "Поиск контроллера" : "Подключено";
+        badge.UpdateStatus(modeStatus, link.Connected, drive.IsOn && !screenMode);
+        screenLamp.UpdateStatus(modeStatus, link.Connected, drive.IsOn && screenMode);
         status.Text = drive.IsOn && !link.Connected ? link.Message : "";
         captureStatus.Text = drive.Mode == LightMode.Screen ? engine.CaptureError ?? "" : "";
     }
@@ -302,6 +340,7 @@ internal sealed class MainWindow : Form
     private void SelectColor(Color shade)
     {
         color = shade;
+        colorLamp.UpdateStatus("Цвет выбран", false, false);
         HighlightColor();
         Changed();
     }
@@ -338,28 +377,6 @@ internal sealed class MainWindow : Form
             files.Log("Не удалось сохранить настройки. " + ex.Message);
             status.Text = "Не удалось сохранить настройки.";
         }
-    }
-
-    private void OpenLog()
-    {
-        using var dialog = new Form
-        {
-            Text = "Журнал — Контур", StartPosition = FormStartPosition.CenterParent,
-            ClientSize = new Size(720, 370), MinimumSize = new Size(530, 240),
-            Font = Font, BackColor = Background, Padding = new Padding(16)
-        };
-        dialog.HandleCreated += (_, _) => Caption(dialog.Handle);
-        var field = new TextBox
-        {
-            Dock = DockStyle.Fill, ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical,
-            Font = new Font("Consolas", 10), BorderStyle = BorderStyle.None, BackColor = WindowStyle.Panel, ForeColor = WindowStyle.Text
-        };
-        try { field.Text = File.Exists(files.LogFile) ? File.ReadAllText(files.LogFile) : "Пока нет событий."; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { field.Text = ex.Message; }
-        field.SelectionStart = field.TextLength;
-        dialog.Controls.Add(field);
-        field.ScrollToCaret();
-        dialog.ShowDialog(this);
     }
 
     private static TableLayoutPanel Table(int columns)

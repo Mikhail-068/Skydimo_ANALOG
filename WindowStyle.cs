@@ -122,11 +122,25 @@ internal sealed class Card : Panel
 
 internal sealed class ConnectionBadge : Label
 {
+    private readonly System.Windows.Forms.Timer fadeTimer = new() { Interval = 16 };
+    private readonly System.Diagnostics.Stopwatch fadeClock = new();
+    private float glow;
+    private float startGlow;
+    private float targetGlow;
     private bool connected;
     private bool requested;
 
+    public (Color Center, Color Edge, Color Groove) UnlitGlass { get; init; } =
+        (Color.FromArgb(39, 72, 55), Color.FromArgb(10, 27, 21), Color.FromArgb(72, 107, 83));
+
+    public (Color Center, Color Edge, Color Groove) LitGlass { get; init; } =
+        (Color.FromArgb(182, 255, 151), Color.FromArgb(19, 110, 56), Color.FromArgb(20, 81, 44));
+
+    public bool BlinkWhenLit { get; init; }
+
     public ConnectionBadge()
     {
+        fadeTimer.Tick += (_, _) => AdvanceFade();
         Font = new Font("Segoe UI", 9, FontStyle.Bold);
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
     }
@@ -138,25 +152,97 @@ internal sealed class ConnectionBadge : Label
         Text = label;
         connected = isConnected;
         requested = isRequested;
+        var nextGlow = connected && requested ? 1f : 0f;
+        if (nextGlow == targetGlow)
+            return;
+
+        startGlow = glow;
+        targetGlow = nextGlow;
+        fadeClock.Restart();
+        fadeTimer.Start();
+    }
+
+    private void AdvanceFade()
+    {
+        var duration = targetGlow == 1f ? 420 : 620;
+        var hold = targetGlow == 0f ? 500 : 0;
+        var elapsed = fadeClock.Elapsed.TotalMilliseconds - hold;
+        if (elapsed < 0)
+            return;
+
+        if (BlinkWhenLit && targetGlow == 1f && elapsed >= duration)
+        {
+            const double cycleMs = 2200;
+            var phase = (elapsed - duration) % cycleMs / cycleMs;
+            glow = (float)((1 + Math.Cos(2 * Math.PI * phase)) / 2);
+            Invalidate();
+            return;
+        }
+
+        var progress = Math.Min(1f, (float)elapsed / duration);
+        var eased = progress * progress * (3 - 2 * progress);
+        glow = startGlow + (targetGlow - startGlow) * eased;
+        if (progress >= 1f)
+        {
+            fadeTimer.Stop();
+            fadeClock.Reset();
+        }
         Invalidate();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            fadeTimer.Dispose();
+        base.Dispose(disposing);
+    }
+
+    private Color Blend(Color dark, Color bright)
+    {
+        int Channel(int from, int to) => (int)Math.Round(from + (to - from) * glow);
+        return Color.FromArgb(Channel(dark.A, bright.A), Channel(dark.R, bright.R),
+            Channel(dark.G, bright.G), Channel(dark.B, bright.B));
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         var scale = DeviceDpi / 96f;
         e.Graphics.Clear(WindowStyle.Background);
-        var tint = connected ? WindowStyle.Active : requested ? WindowStyle.Accent : WindowStyle.Muted;
-        var fill = connected ? Color.FromArgb(24, 47, 52) : Color.FromArgb(24, 30, 39);
-        var edge = connected ? WindowStyle.Active : requested ? WindowStyle.Accent : WindowStyle.Border;
-        WindowStyle.Glow(e.Graphics, new RectangleF(.5f, .5f, Width - 1, Height - 1), 6 * scale, tint);
-        WindowStyle.Rounded(e.Graphics, new RectangleF(.5f, .5f, Width - 1, Height - 1), 5 * scale, fill, edge);
-        using var dot = new SolidBrush(tint);
-        e.Graphics.FillEllipse(dot, 13 * scale, Height / 2f - 3 * scale, 6 * scale, 6 * scale);
-        using var halo = new SolidBrush(connected ? Color.FromArgb(30, 64, 66) : Color.FromArgb(20, 26, 34));
-        e.Graphics.FillEllipse(halo, 10 * scale, Height / 2f - 5 * scale, 10 * scale, 10 * scale);
-        var inset = (int)Math.Round(25 * scale);
-        TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(inset, 0, Width - inset - 4, Height), tint,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        var diameter = 48 * scale;
+        var bezel = new RectangleF((Width - diameter) / 2, (Height - diameter) / 2, diameter, diameter);
+        DrawLamp(e.Graphics, bezel);
+    }
+
+    private void DrawLamp(Graphics graphics, RectangleF bezel)
+    {
+        using var metal = new LinearGradientBrush(bezel,
+            Color.FromArgb(214, 222, 219), Color.FromArgb(66, 77, 82), 115f);
+        graphics.FillEllipse(metal, bezel);
+
+        var lens = RectangleF.Inflate(bezel, -bezel.Width * .06f, -bezel.Height * .06f);
+        using var gasket = new SolidBrush(Color.FromArgb(12, 23, 20));
+        graphics.FillEllipse(gasket, lens);
+        lens.Inflate(-bezel.Width * .04f, -bezel.Height * .04f);
+
+        using var glassShape = new GraphicsPath();
+        glassShape.AddEllipse(lens);
+        using var glass = new PathGradientBrush(glassShape)
+        {
+            CenterColor = Blend(UnlitGlass.Center, LitGlass.Center),
+            SurroundColors = [Blend(UnlitGlass.Edge, LitGlass.Edge)]
+        };
+        graphics.FillEllipse(glass, lens);
+        using var groove = new Pen(Blend(Color.FromArgb(110, UnlitGlass.Groove), Color.FromArgb(105, LitGlass.Groove)),
+            bezel.Width / 40);
+        for (var ring = 1; ring <= 4; ring++)
+        {
+            var inset = lens.Width * ring / 11;
+            graphics.DrawEllipse(groove, RectangleF.Inflate(lens, -inset, -inset));
+        }
+
+        using var reflection = new Pen(Color.FromArgb((int)Math.Round(85 + 95 * glow), 215, 255, 223), bezel.Width / 28);
+        graphics.DrawArc(reflection, RectangleF.Inflate(lens, -lens.Width / 12, -lens.Height / 12), 207, 86);
     }
 }
 
@@ -248,6 +334,7 @@ internal sealed class DriveSelector : DashboardInput
                 motionTimer.Stop();
                 motionClock.Reset();
                 start = target;
+                MotionChanged?.Invoke(this, EventArgs.Empty);
             }
             Invalidate();
         };
@@ -256,6 +343,8 @@ internal sealed class DriveSelector : DashboardInput
     public event EventHandler? ValueChanged;
     public bool IsOn => position != 0;
     public bool ChoosingColor => position == 3;
+    public bool IsMoving => motionClock.IsRunning;
+    public event EventHandler? MotionChanged;
 
     public LightMode Mode
     {
@@ -340,11 +429,14 @@ internal sealed class DriveSelector : DashboardInput
         if (target == destination)
             return;
 
+        var wasMoving = IsMoving;
         start = HandlePosition;
         target = destination;
         durationMs = 120 + 75 * Distance(start, target);
         motionClock.Restart();
         motionTimer.Start();
+        if (!wasMoving)
+            MotionChanged?.Invoke(this, EventArgs.Empty);
         Invalidate();
     }
 
