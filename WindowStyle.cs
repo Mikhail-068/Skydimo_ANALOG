@@ -77,6 +77,60 @@ internal static class WindowStyle
         return path;
     }
 
+    private static readonly Lazy<Bitmap> DashboardGrain = new(CreateDashboardGrain);
+
+    private static Bitmap CreateDashboardGrain()
+    {
+        const int size = 128;
+        var random = new Random(2106);
+        var grain = new Bitmap(size, size);
+        var heights = new int[size, size];
+        for (var y = 0; y < size; y++)
+            for (var x = 0; x < size; x++)
+                heights[x, y] = random.Next(32);
+
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var previous = heights[(x + size - 1) % size, (y + size - 1) % size];
+                var relief = heights[x, y] - previous;
+                var tone = relief > 0 ? 171 : 0;
+                grain.SetPixel(x, y, Color.FromArgb(Math.Abs(relief) * 2, tone, tone, tone));
+            }
+        }
+        return grain;
+    }
+
+    public static void DrawDashboardHeader(Graphics g, Size size, float scale)
+    {
+        var frame = new RectangleF(.5f, .5f, size.Width - 1, size.Height - 4 * scale);
+        if (frame.Width <= 1 || frame.Height <= 1)
+            return;
+
+        Satin(g, frame, 7 * scale, Color.FromArgb(60, 66, 69),
+            Color.FromArgb(22, 26, 29), Color.FromArgb(86, 93, 95));
+        var face = RectangleF.Inflate(frame, -4 * scale, -4 * scale);
+        DrawDashboardPlastic(g, face, scale);
+    }
+
+    public static void DrawDashboardPlastic(Graphics g, RectangleF face, float scale, int shadeOpacity = 0)
+    {
+        if (face.Width <= 2 || face.Height <= 2)
+            return;
+
+        Satin(g, face, 5 * scale, Color.FromArgb(45, 52, 55),
+            Color.FromArgb(24, 30, 34), Color.FromArgb(15, 19, 21));
+        using var plastic = RoundedPath(RectangleF.Inflate(face, -1, -1), 4 * scale);
+        using var texture = new TextureBrush(DashboardGrain.Value);
+        g.FillPath(texture, plastic);
+        if (shadeOpacity > 0)
+        {
+            using var shade = new SolidBrush(Color.FromArgb(shadeOpacity, Color.Black));
+            g.FillPath(shade, plastic);
+        }
+    }
+
     public static void Caption(IntPtr window)
     {
         const int immersiveDarkMode = 20;
@@ -141,8 +195,9 @@ internal sealed class ConnectionBadge : Label
     public ConnectionBadge()
     {
         fadeTimer.Tick += (_, _) => AdvanceFade();
-        Font = new Font("Segoe UI", 9, FontStyle.Bold);
-        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+            ControlStyles.SupportsTransparentBackColor, true);
+        BackColor = Color.Transparent;
     }
 
     public void UpdateStatus(string label, bool isConnected, bool isRequested)
@@ -207,7 +262,6 @@ internal sealed class ConnectionBadge : Label
     protected override void OnPaint(PaintEventArgs e)
     {
         var scale = DeviceDpi / 96f;
-        e.Graphics.Clear(WindowStyle.Background);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         var diameter = 48 * scale;
         var bezel = new RectangleF((Width - diameter) / 2, (Height - diameter) / 2, diameter, diameter);

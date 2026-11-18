@@ -125,14 +125,21 @@ internal sealed class MainWindow : Form
     {
         var header = SingleRow(5);
         header.BackColor = Background;
-        header.Padding = new Padding(1, 0, 0, 0);
+        header.Padding = new Padding(17, 0, 8, 0);
+        header.Paint += (sender, e) =>
+        {
+            var panel = (Control)sender!;
+            DrawDashboardHeader(e.Graphics, panel.ClientSize, panel.DeviceDpi / 96f);
+        };
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
-        var title = Table(1);
-        AddRow(title, Label("Подсветка монитора", 27, color: Silver, font: "Bahnschrift"), 40);
+        var title = Label("Подсветка монитора", 24, color: Color.FromArgb(233, 233, 233),
+            font: "Bahnschrift SemiCondensed");
+        title.BackColor = Color.Transparent;
+        title.Dock = DockStyle.Fill;
         header.Controls.Add(title, 0, 0);
 
         badge.Margin = new Padding(0, 0, 10, 0);
@@ -176,7 +183,15 @@ internal sealed class MainWindow : Form
         AddRow(screenSettings, Label("Монитор", 9, true, Muted), 24);
         AddRow(screenSettings, monitor, 118);
         AddRow(screenSettings, reverse, 28);
-        var details = new Panel { Margin = new Padding(0, 12, 0, 0) };
+        content.Paint += (_, e) =>
+        {
+            var bounds = RectangleF.FromLTRB(.5f, drive.Bottom + 1, content.ClientSize.Width - .5f,
+                content.ClientSize.Height - .5f);
+            DrawDashboardPlastic(e.Graphics, bounds, content.DeviceDpi / 96f, shadeOpacity: 38);
+        };
+        var details = new Panel { Margin = new Padding(0, 12, 0, 0), BackColor = Color.Transparent };
+        captureStatus.BackColor = Color.Transparent;
+        status.BackColor = Color.Transparent;
         details.Controls.Add(screenSettings);
         details.Controls.Add(colors);
         AddRow(content, details, 183);
