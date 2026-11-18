@@ -5,15 +5,19 @@ namespace Kontur;
 
 internal static class WindowStyle
 {
-    public static readonly Color Background = Color.FromArgb(9, 12, 17);
-    public static readonly Color Panel = Color.FromArgb(19, 24, 31);
-    public static readonly Color Field = Color.FromArgb(26, 32, 40);
-    public static readonly Color Border = Color.FromArgb(62, 74, 87);
+    public static readonly Color Background = Color.FromArgb(8, 11, 16);
+    public static readonly Color Panel = Color.FromArgb(22, 28, 36);
+    public static readonly Color Field = Color.FromArgb(30, 37, 47);
+    public static readonly Color Border = Color.FromArgb(58, 72, 90);
+    public static readonly Color BorderSoft = Color.FromArgb(40, 52, 68);
+    public static readonly Color GlowColor = Color.FromArgb(38, 58, 78);
+    public static readonly Color TextDim = Color.FromArgb(150, 163, 178);
     public static readonly Color Text = Color.FromArgb(243, 245, 246);
     public static readonly Color Muted = Color.FromArgb(195, 205, 214);
     public static readonly Color Silver = Color.FromArgb(214, 223, 226);
     public static readonly Color Accent = Color.FromArgb(255, 198, 112);
-    public static readonly Color Active = Color.FromArgb(142, 225, 210);
+    public static readonly Color Active = Color.FromArgb(122, 232, 208);
+    public static readonly Color Status = Color.FromArgb(122, 232, 208);
 
     public static Label Label(string text, float size = 10, bool bold = false, Color? color = null, string font = "Segoe UI") =>
         new() { Text = text, Font = new Font(font, size, bold ? FontStyle.Bold : FontStyle.Regular),
@@ -36,14 +40,29 @@ internal static class WindowStyle
 
     public static void Satin(Graphics g, RectangleF bounds, float radius, Color top, Color bottom, Color edge)
     {
+        Satin(g, bounds, radius, top, bottom, edge, null);
+    }
+
+    public static void Satin(Graphics g, RectangleF bounds, float radius, Color top, Color bottom, Color edge, Color? glow = null)
+    {
         if (bounds.Width <= 1 || bounds.Height <= 1)
             return;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        if (glow is Color color) Glow(g, bounds, radius, color);
         using var path = RoundedPath(bounds, radius);
         using var fill = new LinearGradientBrush(bounds, top, bottom, 90f);
         using var outline = new Pen(edge);
         g.FillPath(fill, path);
         g.DrawPath(outline, path);
+    }
+
+    public static void Glow(Graphics g, RectangleF bounds, float radius, Color color)
+    {
+        var size = 1.9f;
+        var expanded = RectangleF.Inflate(bounds, radius * size, radius * size);
+        using var path = RoundedPath(expanded, radius * size);
+        using var fade = new LinearGradientBrush(expanded, color, Color.FromArgb(0, color.R, color.G, color.B), 90f);
+        g.FillPath(fade, path);
     }
 
     public static GraphicsPath RoundedPath(RectangleF bounds, float radius)
@@ -88,10 +107,16 @@ internal sealed class Card : Panel
     {
         e.Graphics.Clear(WindowStyle.Background);
         var scale = DeviceDpi / 96f;
-        WindowStyle.Satin(e.Graphics, new RectangleF(.5f, .5f, Width - 1, Height - 1),
-            13 * scale, Color.FromArgb(36, 45, 55), WindowStyle.Panel, WindowStyle.Border);
+        var rect = new RectangleF(.5f, .5f, Width - 1, Height - 1);
+        WindowStyle.Glow(e.Graphics, rect, 15 * scale, Color.FromArgb(36, 54, 72));
+        WindowStyle.Satin(e.Graphics, rect, 13 * scale,
+            Color.FromArgb(40, 50, 61), WindowStyle.Panel, WindowStyle.Border);
         using var trim = new Pen(Color.FromArgb(212, 165, 106), 1.3f * scale);
         e.Graphics.DrawLine(trim, 15 * scale, 1, Math.Min(90 * scale, Width - 15 * scale), 1);
+        using var corner = new Pen(Color.FromArgb(196, 226, 214), 1.3f * scale);
+        e.Graphics.DrawLine(corner, Width - 1 - 15 * scale, 1, Width - 1 - 15 * scale, 1 + 34 * scale);
+        using var baseLine = new Pen(Color.FromArgb(96, 108, 119), 1.2f * scale);
+        e.Graphics.DrawLine(baseLine, 15 * scale, 1 + 14 * scale, Width - 1 - 15 * scale, 1 + 14 * scale);
     }
 }
 
@@ -121,10 +146,14 @@ internal sealed class ConnectionBadge : Label
         var scale = DeviceDpi / 96f;
         e.Graphics.Clear(WindowStyle.Background);
         var tint = connected ? WindowStyle.Active : requested ? WindowStyle.Accent : WindowStyle.Muted;
-        var fill = connected ? Color.FromArgb(22, 45, 49) : Color.FromArgb(24, 30, 39);
-        WindowStyle.Rounded(e.Graphics, new RectangleF(.5f, .5f, Width - 1, Height - 1), 5 * scale, fill, WindowStyle.Border);
+        var fill = connected ? Color.FromArgb(24, 47, 52) : Color.FromArgb(24, 30, 39);
+        var edge = connected ? WindowStyle.Active : requested ? WindowStyle.Accent : WindowStyle.Border;
+        WindowStyle.Glow(e.Graphics, new RectangleF(.5f, .5f, Width - 1, Height - 1), 6 * scale, tint);
+        WindowStyle.Rounded(e.Graphics, new RectangleF(.5f, .5f, Width - 1, Height - 1), 5 * scale, fill, edge);
         using var dot = new SolidBrush(tint);
         e.Graphics.FillEllipse(dot, 13 * scale, Height / 2f - 3 * scale, 6 * scale, 6 * scale);
+        using var halo = new SolidBrush(connected ? Color.FromArgb(30, 64, 66) : Color.FromArgb(20, 26, 34));
+        e.Graphics.FillEllipse(halo, 10 * scale, Height / 2f - 5 * scale, 10 * scale, 10 * scale);
         var inset = (int)Math.Round(25 * scale);
         TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(inset, 0, Width - inset - 4, Height), tint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
@@ -156,10 +185,11 @@ internal sealed class StudioButton : Button
         var bounds = new RectangleF(.5f, .5f, Width - 1, Height - 1);
         var edge = Focused && ShowFocusCues ? WindowStyle.Accent : filled ? WindowStyle.Silver : WindowStyle.Border;
         if (filled)
-            WindowStyle.Satin(g, bounds, 6 * scale, hovered ? Color.White : WindowStyle.Silver, Color.FromArgb(142, 159, 178), edge);
+            WindowStyle.Satin(g, bounds, 6 * scale, hovered ? Color.White : WindowStyle.Silver,
+                Color.FromArgb(142, 159, 178), edge, edge);
         else
             WindowStyle.Satin(g, bounds, 6 * scale, hovered ? Color.FromArgb(45, 56, 68) : Color.FromArgb(37, 46, 56),
-                WindowStyle.Field, edge);
+                WindowStyle.Field, edge, edge);
         var textBounds = ClientRectangle;
         var format = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
         if (Swatch is Color color)
@@ -225,6 +255,7 @@ internal sealed class DriveSelector : DashboardInput
 
     public event EventHandler? ValueChanged;
     public bool IsOn => position != 0;
+    public bool ChoosingColor => position == 3;
 
     public LightMode Mode
     {
@@ -243,14 +274,14 @@ internal sealed class DriveSelector : DashboardInput
         get => position;
         set
         {
-            value = Math.Clamp(value, 0, 2);
+            value = Math.Clamp(value, 0, 3);
             AnimateTo(value);
             if (position == value)
                 return;
 
             position = value;
             if (IsOn)
-                lastMode = position == 1 ? LightMode.Solid : LightMode.Screen;
+                lastMode = position == 2 ? LightMode.Screen : LightMode.Solid;
 
             AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
             ValueChanged?.Invoke(this, EventArgs.Empty);
@@ -261,6 +292,7 @@ internal sealed class DriveSelector : DashboardInput
     {
         1 => new(-1, 1),
         2 => new(1, 1),
+        3 => new(-1, 0),
         _ => PointF.Empty
     };
 
@@ -279,15 +311,23 @@ internal sealed class DriveSelector : DashboardInput
 
     internal static PointF AlongGate(PointF from, PointF to, float progress)
     {
-        if (from.X == to.X || from.Y == to.Y)
+        if (from.X == to.X || (from.Y == Junction.Y && to.Y == Junction.Y))
             return Interpolate(from, to, progress);
 
-        var firstLeg = Distance(from, Junction);
-        var distance = (firstLeg + Distance(Junction, to)) * progress;
-        if (distance <= firstLeg)
-            return Interpolate(from, Junction, distance / firstLeg);
+        var fromBranch = new PointF(from.X, Junction.Y);
+        var toBranch = new PointF(to.X, Junction.Y);
+        var firstLeg = Distance(from, fromBranch);
+        var middleLeg = Distance(fromBranch, toBranch);
+        var lastLeg = Distance(toBranch, to);
+        var distance = (firstLeg + middleLeg + lastLeg) * progress;
+        if (firstLeg > 0 && distance <= firstLeg)
+            return Interpolate(from, fromBranch, distance / firstLeg);
 
-        return Interpolate(Junction, to, (distance - firstLeg) / Distance(Junction, to));
+        distance -= firstLeg;
+        if (middleLeg > 0 && distance <= middleLeg)
+            return Interpolate(fromBranch, toBranch, distance / middleLeg);
+
+        return lastLeg > 0 ? Interpolate(toBranch, to, (distance - middleLeg) / lastLeg) : to;
     }
 
     private static float Distance(PointF a, PointF b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y);
@@ -329,26 +369,24 @@ internal sealed class DriveSelector : DashboardInput
         var left = Map(Detent(1));
         var right = Map(Detent(2));
         var joint = Map(Junction);
+        var palette = Map(Detent(3));
+        var highlighted = Capture ? dragPosition : position;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        PaintGate(Color.FromArgb(63, 75, 86), 13 * scale);
-        PaintGate(Color.FromArgb(6, 9, 12), 10 * scale);
+        var gate = highlighted == 0 ? Color.FromArgb(63, 75, 86) : Color.FromArgb(30, 42, 54);
+        WindowStyle.Satin(g, new RectangleF(upper.X - 14 * scale, upper.Y - 14 * scale, 28 * scale, 28 * scale),
+            13 * scale, Color.FromArgb(63, 75, 86), gate, Color.FromArgb(40, 52, 68));
+        WindowStyle.Satin(g, new RectangleF(joint.X - 12 * scale, joint.Y - 12 * scale, 24 * scale, 24 * scale),
+            10 * scale, Color.FromArgb(63, 75, 86), gate, Color.FromArgb(40, 52, 68));
 
         using var inlay = new Pen(Color.FromArgb(86, 96, 105), scale);
         g.DrawLine(inlay, upper, joint);
+        g.DrawLine(inlay, palette, left);
         g.DrawLine(inlay, left, right);
 
-        void PaintGate(Color ink, float width)
-        {
-            using var pen = new Pen(ink, width) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            g.DrawLine(pen, upper, joint);
-            g.DrawLine(pen, left, right);
-        }
-
         using var rings = new Pen(Color.FromArgb(95, 107, 118), scale);
-        using var activeRing = new Pen(Color.FromArgb(165, 108, 54), 1.4f * scale);
-        var highlighted = Capture ? dragPosition : position;
-        for (var i = 0; i < 3; i++)
+        using var activeRing = new Pen(highlighted == 1 ? Color.FromArgb(255, 201, 120) : Color.FromArgb(255, 198, 112), 1.5f * scale);
+        for (var i = 0; i < 4; i++)
         {
             var detent = Map(Detent(i));
             var ring = new RectangleF(detent.X - 7 * scale, detent.Y - 7 * scale, 14 * scale, 14 * scale);
@@ -362,6 +400,9 @@ internal sealed class DriveSelector : DashboardInput
         TextRenderer.DrawText(g, "Выкл", Font,
             Rectangle.Round(new RectangleF(center - 40 * scale, 8 * scale, 80 * scale, 18 * scale)),
             highlighted == 0 ? WindowStyle.Accent : WindowStyle.Muted, flags);
+        TextRenderer.DrawText(g, "Цвет", Font,
+            Rectangle.Round(new RectangleF(palette.X - 36 * scale, 8 * scale, 72 * scale, 18 * scale)),
+            highlighted == 3 ? WindowStyle.Accent : WindowStyle.Muted, flags);
         var half = Width / 2;
         TextRenderer.DrawText(g, "Один цвет", Font,
             new Rectangle(4, (int)(Height - 24 * scale), half - 8, (int)(19 * scale)),
@@ -404,7 +445,10 @@ internal sealed class DriveSelector : DashboardInput
     private int Choose(int x, int y)
     {
         if (y < Height * .48f)
-            return 0;
+        {
+            var paletteBoundary = Width / 2f - Math.Min(72 * DeviceDpi / 96f, Width * .22f) / 2;
+            return (position is 1 or 3) && x < paletteBoundary ? 3 : 0;
+        }
 
         var center = Width / 2;
         if (Math.Abs(x - center) <= 6 * DeviceDpi / 96)
@@ -438,8 +482,9 @@ internal sealed class DriveSelector : DashboardInput
         base.OnMouseUp(e);
         if (e.Button == MouseButtons.Left && Capture)
         {
-            Position = Choose(e.X, e.Y);
+            var next = Choose(e.X, e.Y);
             Capture = false;
+            Position = next;
         }
     }
 
@@ -458,7 +503,7 @@ internal sealed class DriveSelector : DashboardInput
         base.OnKeyDown(e);
         switch (e.KeyCode)
         {
-            case Keys.Up: Position = 0; break;
+            case Keys.Up: Position = position == 1 ? 3 : 0; break;
             case Keys.Left: Position = 1; break;
             case Keys.Right: Position = 2; break;
             case Keys.Down: Position = Mode == LightMode.Solid ? 1 : 2; break;
@@ -481,12 +526,13 @@ internal sealed class DriveSelector : DashboardInput
     {
         public override string? Value
         {
-            get => owner.Position switch { 0 => "Выключено", 1 => "Один цвет", _ => "Цвета экрана" };
+            get => owner.Position switch { 0 => "Выключено", 1 => "Один цвет", 2 => "Цвета экрана", _ => "Выбор цвета" };
             set
             {
                 if (value == "Выключено") owner.Position = 0;
                 else if (value == "Один цвет") owner.Position = 1;
                 else if (value == "Цвета экрана") owner.Position = 2;
+                else if (value == "Выбор цвета" && owner.Position is 1 or 3) owner.Position = 3;
             }
         }
     }
@@ -533,13 +579,17 @@ internal sealed class BrightnessSlider : Control
         var y = Height / 2f;
         var x = Inset + width * Value / 100;
         var track = new RectangleF(Inset, y - 2 * scale, width, 4 * scale);
-        WindowStyle.Rounded(g, track, 2 * scale, Color.FromArgb(55, 65, 76));
+        WindowStyle.Satin(g, track, 2 * scale, Color.FromArgb(70, 80, 92), Color.FromArgb(40, 52, 66),
+            Color.FromArgb(34, 46, 58), Color.FromArgb(30, 42, 54));
         if (x - Inset > 1)
-            WindowStyle.Rounded(g, new RectangleF(Inset, track.Y, x - Inset, track.Height), 2 * scale, WindowStyle.Accent);
+            WindowStyle.Satin(g, new RectangleF(Inset, track.Y, x - Inset, track.Height), 2 * scale,
+                Color.FromArgb(255, 201, 120), Color.FromArgb(255, 178, 92),
+                Color.FromArgb(255, 201, 120), Color.FromArgb(190, 140, 60));
 
         var thumb = new RectangleF(x - 6 * scale, y - 6 * scale, 12 * scale, 12 * scale);
-        WindowStyle.Rounded(g, thumb, 6 * scale, WindowStyle.Silver,
-            Focused && ShowFocusCues ? WindowStyle.Accent : WindowStyle.Panel);
+        WindowStyle.Satin(g, thumb, 6 * scale, WindowStyle.Silver, WindowStyle.Background,
+            Focused && ShowFocusCues ? WindowStyle.Accent : WindowStyle.Panel,
+            Focused && ShowFocusCues ? Color.FromArgb(190, 140, 60) : Color.FromArgb(24, 32, 42));
     }
 
     protected override void OnMouseDown(MouseEventArgs e)

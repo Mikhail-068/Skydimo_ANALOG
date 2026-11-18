@@ -96,21 +96,40 @@ internal static class SelfTest
             var drive = controls.OfType<DriveSelector>().Single();
             var monitor = controls.OfType<MonitorSelector>().Single();
             var preview = controls.OfType<LedPreview>().Single();
-            var palette = preview.ContextMenuStrip!;
+            var palette = controls.OfType<TableLayoutPanel>().Single(item => item.Name == "ColorPalette");
             var displayChoices = Descendants(monitor).OfType<CheckBox>().ToArray();
-            Check(slider.Value == 51 && preview.SolidColor.ToArgb() == Color.FromArgb(134, 218, 227).ToArgb(),
-                "Загрузка прежней схемы настроек");
+            Check(slider.Value == 51, "Загрузка прежней схемы настроек");
             Check(slider.FindForm() == window && preview.Contains(slider), "Регулятор яркости находится под предпросмотром");
-            preview.AccessibilityObject.DoDefaultAction();
-            PumpWindow();
-            Check(palette.Visible && palette.Items.OfType<ToolStripMenuItem>().Any(item => item.Text == "Другой цвет…"),
-                "Экран открывает палитру с произвольным цветом");
-            palette.Items.OfType<ToolStripMenuItem>().Single(item => item.Text == "Красный").PerformClick();
-            palette.Close();
-            Check(!drive.IsOn && preview.SolidColor.ToArgb() == Color.FromArgb(255, 96, 91).ToArgb(),
-                "Выбор цвета в выключенном режиме сохраняет оттенок");
             drive.AccessibilityObject.Value = "Один цвет";
-            PumpWindow(340);
+            drive.AccessibilityObject.Value = "Выбор цвета";
+            PumpWindow();
+            Check(drive.ChoosingColor && drive.IsOn && palette.Visible &&
+                palette.Controls.OfType<StudioButton>().Any(item => item.Text == "Другой цвет…"), "Палитра на левой ветке");
+            palette.Controls.OfType<StudioButton>().Single(item => item.Text == "Синий").PerformClick();
+            PumpWindow(450);
+            Check(files.Load().ColorArgb == Color.FromArgb(97, 157, 255).ToArgb() && palette.Visible,
+                "Цвет применяется сразу, палитра остаётся открытой");
+            palette.Controls.OfType<StudioButton>().Single(item => item.Text == "Красный").PerformClick();
+            PumpWindow(450);
+            Check(files.Load().ColorArgb == Color.FromArgb(255, 96, 91).ToArgb() && palette.Visible,
+                "Следующий оттенок применяется без закрытия палитры");
+            var editedShade = Color.FromArgb(221, 72, 41);
+            window.ReplaceSelectedPaletteColor(editedShade);
+            PumpWindow(450);
+            var red = palette.Controls.OfType<StudioButton>().Single(item => item.Text == "Красный");
+            var blue = palette.Controls.OfType<StudioButton>().Single(item => item.Text == "Синий");
+            Check(red.Swatch == editedShade && blue.Swatch == Color.FromArgb(255, 97, 157, 255),
+                "Другой цвет заменяет только выбранную кнопку");
+            Check(files.Load().PaletteOverrides?[3] == editedShade.ToArgb() && files.Load().PaletteSlot == 3 &&
+                files.Load().ColorArgb == editedShade.ToArgb(), "Оттенок кнопки и выбор сохраняются");
+            blue.PerformClick();
+            red.PerformClick();
+            PumpWindow(450);
+            Check(files.Load().ColorArgb == editedShade.ToArgb(), "Повторное нажатие применяет отредактированный оттенок");
+            CaptureWindow(window, folder, "palette.png");
+            drive.AccessibilityObject.Value = "Один цвет";
+            PumpWindow();
+            Check(!palette.Visible && files.Load().ColorArgb == editedShade.ToArgb(), "Выход сохраняет оттенок");
             Check(!monitor.Visible && preview.Visible, "Настройки режима «Один цвет»");
             CheckLayout(controls);
             CaptureWindow(window, folder, "solid.png");
@@ -137,13 +156,8 @@ internal static class SelfTest
             PumpWindow();
             CheckLayout(controls);
             CaptureWindow(window, folder, "screen-min.png");
-            preview.AccessibilityObject.DoDefaultAction();
-            PumpWindow();
-            palette.Items.OfType<ToolStripMenuItem>().Single(item => item.Text == "Бирюзовый").PerformClick();
-            palette.Close();
-            Check(drive.IsOn && drive.Mode == LightMode.Solid && !monitor.Visible,
-                "Выбор цвета из режима экрана переключает ленту на один цвет");
-            drive.AccessibilityObject.Value = "Цвета экрана";
+            drive.AccessibilityObject.Value = "Выбор цвета";
+            Check(drive.Mode == LightMode.Screen && !palette.Visible, "Правая ветка не открывает палитру");
 
             drive.AccessibilityObject.Value = "Выключено";
             PumpWindow(340);
@@ -157,7 +171,7 @@ internal static class SelfTest
                 "Проверка интерфейса не подключается к ленте");
             window.Close();
             Check(files.Load().Brightness == 64 && files.Load().Mode == LightMode.Screen
-                && files.Load().ColorArgb == Color.FromArgb(148, 220, 228).ToArgb()
+                && files.Load().ColorArgb == editedShade.ToArgb()
                 && files.Load().Monitor == monitor.SelectedDisplay?.DeviceName, "Сохранение яркости, режима, оттенка и монитора");
             File.WriteAllText(report, "OK · палитра, мониторы, оба режима, сохранение, яркость, выключатель, минимальный размер");
             return 0;

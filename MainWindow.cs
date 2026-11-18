@@ -17,13 +17,16 @@ internal sealed class MainWindow : Form
     private readonly ConnectionBadge badge = new();
     private readonly Label status = Label("", 9, color: Muted);
     private readonly Label captureStatus = Label("", 9, color: Muted);
-    private readonly ContextMenuStrip colors = new() { AccessibleName = "Цвет ленты" };
+    private readonly TableLayoutPanel colors = Table(3);
 
     private readonly LedPreview preview = new();
     private readonly TableLayoutPanel screenSettings = Table(1);
     private readonly System.Windows.Forms.Timer refresh = new() { Interval = 100 };
     private readonly System.Windows.Forms.Timer save = new() { Interval = 350 };
     private Color color;
+    private readonly Dictionary<int, int> paletteOverrides;
+    private int? paletteSlot;
+    private StudioButton? customColor;
     private int displayRefresh;
     private string savedPort = "COM12";
 
@@ -51,6 +54,8 @@ internal sealed class MainWindow : Form
         drive.Mode = settings.Mode;
         reverse.Checked = settings.Reverse;
         color = Color.FromArgb(settings.ColorArgb);
+        paletteOverrides = settings.PaletteOverrides ?? new Dictionary<int, int>();
+        paletteSlot = settings.PaletteSlot;
 
         engine = new LightingEngine(Current(), files);
         BindActions();
@@ -72,6 +77,14 @@ internal sealed class MainWindow : Form
     {
         var layout = Table(2);
         layout.BackColor = Background;
+        layout.Paint += (s, e) =>
+        {
+            var g = e.Graphics;
+            var scale = DeviceDpi / 96f;
+            var rect = new RectangleF(.5f, .5f, layout.ClientSize.Width - 1, layout.ClientSize.Height - 1);
+            Satin(g, rect, 26 * scale, Color.FromArgb(30, 39, 50), Color.FromArgb(11, 16, 23), Color.FromArgb(32, 44, 56));
+            Glow(g, rect, 30 * scale, Color.FromArgb(18, 32, 46));
+        };
         layout.Padding = new Padding(24, 15, 24, 24);
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 61));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 39));
@@ -87,9 +100,11 @@ internal sealed class MainWindow : Form
 
         var side = Table(1);
         side.BackColor = Background;
+
         side.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         side.Controls.Add(BuildSettings(), 0, side.RowCount++);
         layout.Controls.Add(side, 1, 1);
+
         return layout;
     }
 
@@ -102,8 +117,7 @@ internal sealed class MainWindow : Form
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 183));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 99));
         var title = Table(1);
-        AddRow(title, Label("Контур", 27, color: Silver, font: "Bahnschrift"), 40);
-        AddRow(title, Label("Подсветка монитора", 10, color: Muted), 21);
+        AddRow(title, Label("Подсветка монитора", 27, color: Silver, font: "Bahnschrift"), 40);
         header.Controls.Add(title, 0, 0);
 
         badge.Margin = new Padding(0, 0, 10, 0);
@@ -127,11 +141,14 @@ internal sealed class MainWindow : Form
 
         screenSettings.BackColor = Field;
         screenSettings.Padding = new Padding(9, 0, 9, 0);
-        screenSettings.Margin = new Padding(0, 12, 0, 0);
+
         AddRow(screenSettings, Label("Монитор", 9, true, Muted), 24);
         AddRow(screenSettings, monitor, 118);
         AddRow(screenSettings, reverse, 28);
-        AddRow(content, screenSettings, 183);
+        var details = new Panel { Margin = new Padding(0, 12, 0, 0) };
+        details.Controls.Add(screenSettings);
+        details.Controls.Add(colors);
+        AddRow(content, details, 183);
         AddRow(content, captureStatus, 22);
         AddRow(content, status, 40);
         AddSpace(content);
@@ -166,16 +183,7 @@ internal sealed class MainWindow : Form
         monitor.SelectionChanged += (_, _) => Changed();
         reverse.CheckedChanged += (_, _) => Changed();
         brightness.ValueChanged += (_, _) => Changed();
-        BuildColorMenu();
-        preview.ContextMenuStrip = colors;
-        colors.ForeColor = WindowStyle.Text;
-        colors.Renderer = new ToolStripProfessionalRenderer(new PaletteMenuColors()) { RoundedEdges = false };
-        colors.Opening += (_, _) =>
-        {
-            foreach (var item in colors.Items.OfType<ToolStripMenuItem>())
-                item.Checked = item.Tag is Color shade && shade.ToArgb() == color.ToArgb();
-        };
-        preview.PaletteRequested += (_, _) => colors.Show(preview, preview.PaletteAnchor);
+        BuildPalette();
         refresh.Tick += (_, _) => RefreshPreview();
         save.Tick += (_, _) => SaveSettings();
         FormClosed += (_, _) =>
@@ -185,9 +193,6 @@ internal sealed class MainWindow : Form
                 SaveSettings();
             refresh.Dispose();
             save.Dispose();
-            foreach (ToolStripItem item in colors.Items)
-                item.Image?.Dispose();
-            colors.Dispose();
             engine.Dispose();
         };
     }
@@ -213,6 +218,8 @@ internal sealed class MainWindow : Form
             Monitor = selected?.DeviceName ?? "",
             Brightness = brightness.Value,
             ColorArgb = color.ToArgb(),
+            PaletteOverrides = paletteOverrides.Count == 0 ? null : new Dictionary<int, int>(paletteOverrides),
+            PaletteSlot = paletteSlot,
             Mode = drive.Mode,
             Reverse = reverse.Checked
         }, selected?.Bounds ?? Rectangle.Empty, drive.IsOn, drive.IsOn && !backgroundPreview ? "auto" : null);
@@ -220,10 +227,10 @@ internal sealed class MainWindow : Form
 
     private void UpdatePresentation()
     {
+        colors.Visible = drive.ChoosingColor;
         screenSettings.Visible = drive.IsOn && drive.Mode == LightMode.Screen;
-        preview.SolidColor = color;
         brightnessValue.Text = $"{brightness.Value} %";
-        powerState.Text = drive.IsOn ? "Включена" : "Выключена";
+        powerState.Text = drive.ChoosingColor ? "Выбор цвета" : drive.IsOn ? "Включена" : "Выключена";
 
     }
 
@@ -239,7 +246,7 @@ internal sealed class MainWindow : Form
         captureStatus.Text = drive.Mode == LightMode.Screen ? engine.CaptureError ?? "" : "";
     }
 
-    private void BuildColorMenu()
+    private void BuildPalette()
     {
         var choices = new (string Name, int Rgb)[]
         {
@@ -248,47 +255,78 @@ internal sealed class MainWindow : Form
             ("Розовый", 0xF38EBE), ("Фиолетовый", 0xAB91FF),
             ("Синий", 0x619DFF), ("Бирюзовый", 0x94DCE4), ("Зелёный", 0x7BDAA3)
         };
-        foreach (var (name, rgb) in choices)
+        colors.Name = "ColorPalette";
+        colors.AccessibleName = "Цвет ленты";
+        colors.BackColor = Field;
+        colors.Padding = new Padding(6);
+        for (var column = 0; column < 3; column++)
+            colors.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        for (var row = 0; row < 4; row++)
+            colors.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        colors.RowCount = 4;
+
+        if (paletteSlot is int savedSlot && (savedSlot < 0 || savedSlot >= choices.Length))
+            paletteSlot = null;
+
+        var inferSlot = paletteSlot is null;
+        for (var index = 0; index < choices.Length; index++)
         {
-            var shade = Color.FromArgb(unchecked((int)0xFF000000) | rgb);
-            var swatch = new Bitmap(16, 16);
-            using (var g = Graphics.FromImage(swatch))
-                Rounded(g, new RectangleF(1, 1, 14, 14), 3, shade);
-            var item = new ToolStripMenuItem(name, swatch) { Tag = shade };
-            item.Click += (_, _) => ApplyColor(shade);
-            colors.Items.Add(item);
+            var (name, rgb) = choices[index];
+            var slot = index;
+            var shade = Color.FromArgb(paletteOverrides.TryGetValue(slot, out var argb)
+                ? argb : unchecked((int)0xFF000000) | rgb);
+            var button = new StudioButton(name, name) { Tag = slot, Swatch = shade, Dock = DockStyle.Fill, Margin = new Padding(3) };
+            if (inferSlot && paletteSlot is null && shade.ToArgb() == color.ToArgb())
+                paletteSlot = slot;
+            button.Click += (_, _) =>
+            {
+                paletteSlot = slot;
+                SelectColor(button.Swatch ?? shade);
+            };
+            colors.Controls.Add(button, index % 3, index / 3);
         }
-        colors.Items.Add(new ToolStripSeparator());
-        var custom = new ToolStripMenuItem("Другой цвет…");
+
+        var custom = new StudioButton("Другой цвет…", "Другой цвет…") { Dock = DockStyle.Fill, Margin = new Padding(3) };
         custom.Click += (_, _) =>
         {
             using var dialog = new ColorDialog { Color = color, FullOpen = true };
             if (dialog.ShowDialog(this) == DialogResult.OK)
-                ApplyColor(dialog.Color);
+                ReplaceSelectedPaletteColor(dialog.Color);
         };
-        colors.Items.Add(custom);
+        customColor = custom;
+        colors.Controls.Add(custom, 0, 3);
+        colors.SetColumnSpan(custom, 3);
+        HighlightColor();
     }
 
-    private sealed class PaletteMenuColors : ProfessionalColorTable
-    {
-        public override Color ToolStripDropDownBackground => WindowStyle.Panel;
-        public override Color ImageMarginGradientBegin => Field;
-        public override Color ImageMarginGradientMiddle => Field;
-        public override Color ImageMarginGradientEnd => Field;
-        public override Color MenuBorder => Border;
-        public override Color MenuItemSelected => Color.FromArgb(52, 69, 79);
-        public override Color MenuItemBorder => Border;
-        public override Color SeparatorDark => Border;
-        public override Color SeparatorLight => WindowStyle.Panel;
-    }
-
-    private void ApplyColor(Color shade)
+    private void SelectColor(Color shade)
     {
         color = shade;
-        if (drive.IsOn && drive.Mode == LightMode.Screen)
-            drive.Mode = LightMode.Solid;
-        else
-            Changed();
+        HighlightColor();
+        Changed();
+    }
+
+    internal void ReplaceSelectedPaletteColor(Color shade)
+    {
+        if (paletteSlot is not int slot)
+            return;
+
+        var button = colors.Controls.OfType<StudioButton>().Single(item => item.Tag is int index && index == slot);
+        paletteOverrides[slot] = shade.ToArgb();
+        button.Swatch = shade;
+        SelectColor(shade);
+    }
+
+    private void HighlightColor()
+    {
+        if (customColor is not null)
+            customColor.Enabled = paletteSlot.HasValue;
+
+        foreach (var button in colors.Controls.OfType<StudioButton>())
+        {
+            button.Primary = button.Tag is int slot && slot == paletteSlot;
+            button.Invalidate();
+        }
     }
 
     private void SaveSettings()

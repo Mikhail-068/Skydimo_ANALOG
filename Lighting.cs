@@ -64,6 +64,8 @@ internal sealed record LightSettings
     public string Monitor { get; init; } = "";
     public int Brightness { get; init; } = 44;
     public int ColorArgb { get; init; } = Color.FromArgb(154, 242, 120).ToArgb();
+    public Dictionary<int, int>? PaletteOverrides { get; init; }
+    public int? PaletteSlot { get; init; }
     public LightMode Mode { get; init; } = LightMode.Solid;
     public bool Reverse { get; init; }
 }

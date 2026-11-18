@@ -3,7 +3,7 @@ using System.Drawing.Drawing2D;
 
 namespace Kontur;
 
-internal sealed class LedPreview : DashboardInput
+internal sealed class LedPreview : Control
 {
     private readonly Font wallLabel = new("Segoe UI", 10);
     private readonly Font heading = new("Bahnschrift", 15);
@@ -14,18 +14,6 @@ internal sealed class LedPreview : DashboardInput
     private readonly Bitmap spill = new(Sk0127.Columns, Sk0127.Rows);
     private readonly Font codeFont = new("Consolas", 10);
     private int tick;
-    private Color solidColor;
-    private RectangleF monitorBounds;
-    public event EventHandler? PaletteRequested;
-
-    public Color SolidColor
-    {
-        get => solidColor;
-        set { solidColor = value; Invalidate(); }
-    }
-
-    public Point PaletteAnchor => Point.Round(new PointF(monitorBounds.Right - 106 * DeviceDpi / 96f,
-        monitorBounds.Top + 29 * DeviceDpi / 96f));
     private static readonly string[] Code = [
         "namespace Kontur.Rendering;", "",
         "var frame = await capture.NextAsync();",
@@ -38,12 +26,12 @@ internal sealed class LedPreview : DashboardInput
         "await controller.WriteAsync(edges);"
     ];
 
-    public LedPreview() : base("Экран предпросмотра · выбрать цвет ленты", AccessibleRole.PushButton)
+    public LedPreview()
     {
         DoubleBuffered = true;
         ResizeRedraw = true;
         BackColor = WindowStyle.Background;
-        AccessibleDescription = "Открывает палитру цветов подсветки";
+        AccessibleName = "Экран предпросмотра";
         Cursor = Cursors.Default;
         Margin = Padding.Empty;
         animation.Tick += (_, _) => { if (Visible && FindForm()?.WindowState != FormWindowState.Minimized) { tick++; Invalidate(); } };
@@ -112,14 +100,13 @@ internal sealed class LedPreview : DashboardInput
 
         var width = Math.Min(stage.Width * .72f, stage.Height * 1.23f);
         var height = width * 9 / 16;
-        var monitor = monitorBounds = new RectangleF(stage.Left + (stage.Width - width) / 2,
+        var monitor = new RectangleF(stage.Left + (stage.Width - width) / 2,
             stage.Top + (stage.Height - height) / 2 - 6 * scale, width, height);
         var rail = RectangleF.FromLTRB(monitor.Left - 12 * scale, monitor.Top - 12 * scale,
             monitor.Right + 12 * scale, monitor.Bottom);
         ambient.Draw(g, stage, rail, pixels);
         DrawLight(g, LedPositions(monitor, 12 * scale), scale);
         DrawMonitor(g, monitor, scale);
-        DrawPaletteControl(g, monitor, scale);
         g.Restore(canvas);
     }
 
@@ -221,65 +208,6 @@ internal sealed class LedPreview : DashboardInput
         g.Restore(clipped);
     }
 
-
-    private void DrawPaletteControl(Graphics g, RectangleF monitor, float scale)
-    {
-        var area = new RectangleF(monitor.Right - 106 * scale, monitor.Top + 5 * scale, 101 * scale, 23 * scale);
-        var over = monitor.Contains(PointToClient(MousePosition));
-        WindowStyle.Rounded(g, area, 5 * scale,
-            over ? Color.FromArgb(51, 69, 80) : WindowStyle.Panel,
-            FocusCue ? WindowStyle.Accent : WindowStyle.Border);
-        WindowStyle.Rounded(g, new RectangleF(area.X + 7 * scale, area.Y + 6 * scale, 11 * scale, 11 * scale),
-            3 * scale, solidColor);
-        DrawText(g, "Цвет  ▾", wallLabel, Rectangle.Round(new RectangleF(area.X + 24 * scale, area.Y,
-            area.Width - 27 * scale, area.Height)), WindowStyle.Text, TextFormatFlags.Left);
-    }
-
-    protected override void OnMouseMove(MouseEventArgs e)
-    {
-        base.OnMouseMove(e);
-        Cursor = monitorBounds.Contains(e.Location) ? Cursors.Hand : Cursors.Default;
-    }
-
-    protected override void OnMouseLeave(EventArgs e)
-    {
-        base.OnMouseLeave(e);
-        Cursor = Cursors.Default;
-        Invalidate();
-    }
-
-    protected override void OnMouseClick(MouseEventArgs e)
-    {
-        base.OnMouseClick(e);
-        if (e.Button == MouseButtons.Left && monitorBounds.Contains(e.Location))
-        {
-            Focus();
-            OpenPalette();
-        }
-    }
-
-    protected override bool IsInputKey(Keys keyData) =>
-        (keyData & Keys.KeyCode) is Keys.Enter or Keys.Space || base.IsInputKey(keyData);
-
-    protected override void OnKeyDown(KeyEventArgs e)
-    {
-        base.OnKeyDown(e);
-        if (e.KeyCode is Keys.Enter or Keys.Space)
-        {
-            e.SuppressKeyPress = true;
-            OpenPalette();
-        }
-    }
-
-    private void OpenPalette() => PaletteRequested?.Invoke(this, EventArgs.Empty);
-
-    protected override AccessibleObject CreateAccessibilityInstance() => new PaletteAccess(this);
-
-    private sealed class PaletteAccess(LedPreview owner) : ControlAccessibleObject(owner)
-    {
-        public override string DefaultAction => "Открыть палитру";
-        public override void DoDefaultAction() => owner.OpenPalette();
-    }
 
     private void DrawCounts(Graphics g, int inset, float scale)
     {
