@@ -1,0 +1,21 @@
+{
+  "title": "Поток данных «Контура»",
+  "nodes": [
+    {"id": "ui", "label": "Окно", "detail": "Режим, порт, монитор, яркость"},
+    {"id": "capture", "label": "Захват экрана", "detail": "65 цветов по трём краям"},
+    {"id": "engine", "label": "Цикл отправки", "detail": "Последний кадр или выбранный цвет"},
+    {"id": "wire", "label": "COM-порт", "detail": "201 байт на кадр после проверки модели"},
+    {"id": "strip", "label": "SK0127", "detail": "65 светодиодов"},
+    {"id": "disk", "label": "Локальные файлы", "detail": "Настройки и журнал"}
+  ],
+  "edges": [
+    {"from": "ui", "to": "capture", "label": "Монитор"},
+    {"from": "capture", "to": "engine", "label": "Последние цвета"},
+    {"from": "ui", "to": "engine", "label": "Режим, яркость, подключение"},
+    {"from": "engine", "to": "ui", "label": "Предпросмотр и состояние"},
+    {"from": "engine", "to": "wire", "label": "Кадр RGB по таймеру"},
+    {"from": "wire", "to": "strip", "label": "CH340, 115200 8N1"},
+    {"from": "ui", "to": "disk", "label": "Настройки"},
+    {"from": "engine", "to": "disk", "label": "Ошибки и время записи"}
+  ]
+}

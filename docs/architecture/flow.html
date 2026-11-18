@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Поток данных «Контура»</title>
+<style>
+body{margin:2rem auto;padding:0 1rem;max-width:67rem;font:16px/1.55 system-ui,sans-serif;background:#f6f4f9;color:#221e2f}
+dl{display:grid;grid-template-columns:minmax(10rem,1fr) 3fr;gap:.55rem 1rem}dt{font-weight:650}dd{margin:0}
+ul{list-style:none;padding:0}li{display:grid;grid-template-columns:1fr 1.75fr 1fr;align-items:center;gap:1rem;padding:.65rem 1rem;border-top:1px solid #ded8eb}li span{color:#553997}
+@media(max-width:600px){li{grid-template-columns:1fr;gap:.25rem}}
+</style>
+<main><h1>Поток данных «Контура»</h1><h2>Компоненты</h2><dl><dt>Окно</dt><dd>Режим, порт, монитор, яркость</dd><dt>Захват экрана</dt><dd>65 цветов по трём краям</dd><dt>Цикл отправки</dt><dd>Последний кадр или выбранный цвет</dd><dt>COM-порт</dt><dd>201 байт на кадр после проверки модели</dd><dt>SK0127</dt><dd>65 светодиодов</dd><dt>Локальные файлы</dt><dd>Настройки и журнал</dd></dl><h2>Связи</h2><ul><li><strong>Окно</strong><span>Монитор →</span><strong>Захват экрана</strong></li><li><strong>Захват экрана</strong><span>Последние цвета →</span><strong>Цикл отправки</strong></li><li><strong>Окно</strong><span>Режим, яркость, подключение →</span><strong>Цикл отправки</strong></li><li><strong>Цикл отправки</strong><span>Предпросмотр и состояние →</span><strong>Окно</strong></li><li><strong>Цикл отправки</strong><span>Кадр RGB по таймеру →</span><strong>COM-порт</strong></li><li><strong>COM-порт</strong><span>CH340, 115200 8N1 →</span><strong>SK0127</strong></li><li><strong>Окно</strong><span>Настройки →</span><strong>Локальные файлы</strong></li><li><strong>Цикл отправки</strong><span>Ошибки и время записи →</span><strong>Локальные файлы</strong></li></ul></main>
+</html>

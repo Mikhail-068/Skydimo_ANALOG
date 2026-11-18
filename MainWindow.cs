@@ -1,0 +1,354 @@
+using static Kontur.WindowStyle;
+
+namespace Kontur;
+
+internal sealed class MainWindow : Form
+{
+    private readonly LocalFiles files;
+    private readonly LightingEngine engine;
+    private readonly bool backgroundPreview;
+
+    private readonly MonitorSelector monitor = new();
+    private readonly DriveSelector drive = new();
+    private readonly CheckBox reverse = new() { Text = "Лента подключена справа", Margin = Padding.Empty };
+    private readonly BrightnessSlider brightness = new();
+    private readonly Label brightnessValue = Label("", 15, color: Silver, font: "Bahnschrift");
+    private readonly Label powerState = Label("", 9, color: Muted);
+    private readonly ConnectionBadge badge = new();
+    private readonly Label status = Label("", 9, color: Muted);
+    private readonly Label captureStatus = Label("", 9, color: Muted);
+    private readonly ContextMenuStrip colors = new() { AccessibleName = "Цвет ленты" };
+
+    private readonly LedPreview preview = new();
+    private readonly TableLayoutPanel screenSettings = Table(1);
+    private readonly System.Windows.Forms.Timer refresh = new() { Interval = 100 };
+    private readonly System.Windows.Forms.Timer save = new() { Interval = 350 };
+    private Color color;
+    private int displayRefresh;
+    private string savedPort = "COM12";
+
+    public MainWindow(LocalFiles files, bool backgroundPreview = false)
+    {
+        this.files = files;
+        this.backgroundPreview = backgroundPreview;
+        var settings = files.Load();
+        SuspendLayout();
+        Text = "Контур — подсветка SK0127";
+        StartPosition = FormStartPosition.CenterScreen;
+        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(1060, 650);
+        MinimumSize = new Size(900, 648);
+        BackColor = Background;
+        ForeColor = WindowStyle.Text;
+        Font = new Font("Segoe UI", 10);
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+
+        Controls.Add(BuildLayout());
+        monitor.RefreshDisplays(settings.Monitor);
+        savedPort = settings.Port;
+        brightness.Value = settings.Brightness;
+        drive.Mode = settings.Mode;
+        reverse.Checked = settings.Reverse;
+        color = Color.FromArgb(settings.ColorArgb);
+
+        engine = new LightingEngine(Current(), files);
+        BindActions();
+        UpdatePresentation();
+        RefreshPreview();
+        ResumeLayout(performLayout: true);
+        refresh.Start();
+    }
+
+    protected override bool ShowWithoutActivation => backgroundPreview;
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Caption(Handle);
+    }
+
+    private Control BuildLayout()
+    {
+        var layout = Table(2);
+        layout.BackColor = Background;
+        layout.Padding = new Padding(24, 15, 24, 24);
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 61));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 39));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var header = BuildHeader();
+        layout.Controls.Add(header, 0, 0);
+        layout.SetColumnSpan(header, 2);
+        preview.Dock = DockStyle.Fill;
+        preview.Margin = new Padding(0, 0, 16, 0);
+        preview.Controls.Add(BuildBrightness());
+        layout.Controls.Add(preview, 0, 1);
+
+        var side = Table(1);
+        side.BackColor = Background;
+        side.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        side.Controls.Add(BuildSettings(), 0, side.RowCount++);
+        layout.Controls.Add(side, 1, 1);
+        return layout;
+    }
+
+    private Control BuildHeader()
+    {
+        var header = SingleRow(3);
+        header.BackColor = Background;
+        header.Padding = new Padding(1, 0, 0, 15);
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 183));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 99));
+        var title = Table(1);
+        AddRow(title, Label("Контур", 27, color: Silver, font: "Bahnschrift"), 40);
+        AddRow(title, Label("Подсветка монитора", 10, color: Muted), 21);
+        header.Controls.Add(title, 0, 0);
+
+        badge.Margin = new Padding(0, 0, 10, 0);
+        badge.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        badge.Height = 32;
+        badge.AccessibleName = "Состояние подключения";
+        header.Controls.Add(badge, 1, 0);
+        var log = new StudioButton("Журнал", "Открыть журнал") { Height = 32, Anchor = AnchorStyles.Left | AnchorStyles.Right };
+        log.Click += (_, _) => OpenLog();
+        header.Controls.Add(log, 2, 0);
+        return header;
+    }
+
+    private Control BuildSettings()
+    {
+        var card = new Card { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(18, 15, 18, 14) };
+        var content = Table(1);
+        AddRow(content, Label("Подсветка", 14, true), 30);
+        AddRow(content, powerState, 22);
+        AddRow(content, drive, 155);
+
+        screenSettings.BackColor = Field;
+        screenSettings.Padding = new Padding(9, 0, 9, 0);
+        screenSettings.Margin = new Padding(0, 12, 0, 0);
+        AddRow(screenSettings, Label("Монитор", 9, true, Muted), 24);
+        AddRow(screenSettings, monitor, 118);
+        AddRow(screenSettings, reverse, 28);
+        AddRow(content, screenSettings, 183);
+        AddRow(content, captureStatus, 22);
+        AddRow(content, status, 40);
+        AddSpace(content);
+        card.Controls.Add(content);
+        return card;
+    }
+
+    private Control BuildBrightness()
+    {
+        var content = Table(1);
+        content.Dock = DockStyle.Bottom;
+        content.Height = 53;
+        content.BackColor = WindowStyle.Panel;
+        var level = SingleRow(2);
+        level.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        level.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 74));
+        var brightnessLabel = Label("Яркость", 10, true);
+        brightnessLabel.Dock = DockStyle.Fill;
+        level.Controls.Add(brightnessLabel, 0, 0);
+        brightnessValue.Dock = DockStyle.Fill;
+        brightnessValue.TextAlign = ContentAlignment.MiddleRight;
+        level.Controls.Add(brightnessValue, 1, 0);
+        AddRow(content, level, 24);
+        AddRow(content, brightness, 28);
+        return content;
+    }
+
+    private void BindActions()
+    {
+        Shown += (_, _) => ActiveControl = drive;
+        drive.ValueChanged += (_, _) => Changed();
+        monitor.SelectionChanged += (_, _) => Changed();
+        reverse.CheckedChanged += (_, _) => Changed();
+        brightness.ValueChanged += (_, _) => Changed();
+        BuildColorMenu();
+        preview.ContextMenuStrip = colors;
+        colors.ForeColor = WindowStyle.Text;
+        colors.Renderer = new ToolStripProfessionalRenderer(new PaletteMenuColors()) { RoundedEdges = false };
+        colors.Opening += (_, _) =>
+        {
+            foreach (var item in colors.Items.OfType<ToolStripMenuItem>())
+                item.Checked = item.Tag is Color shade && shade.ToArgb() == color.ToArgb();
+        };
+        preview.PaletteRequested += (_, _) => colors.Show(preview, preview.PaletteAnchor);
+        refresh.Tick += (_, _) => RefreshPreview();
+        save.Tick += (_, _) => SaveSettings();
+        FormClosed += (_, _) =>
+        {
+            refresh.Stop();
+            if (save.Enabled)
+                SaveSettings();
+            refresh.Dispose();
+            save.Dispose();
+            foreach (ToolStripItem item in colors.Items)
+                item.Image?.Dispose();
+            colors.Dispose();
+            engine.Dispose();
+        };
+    }
+
+    private void Changed(bool saveSettings = true)
+    {
+        engine.Update(Current());
+        UpdatePresentation();
+        if (saveSettings)
+        {
+            save.Stop();
+            save.Start();
+        }
+    }
+
+    private LightingInput Current()
+    {
+        var selected = monitor.SelectedDisplay ?? Screen.PrimaryScreen;
+
+        return new LightingInput(new LightSettings
+        {
+            Port = savedPort,
+            Monitor = selected?.DeviceName ?? "",
+            Brightness = brightness.Value,
+            ColorArgb = color.ToArgb(),
+            Mode = drive.Mode,
+            Reverse = reverse.Checked
+        }, selected?.Bounds ?? Rectangle.Empty, drive.IsOn, drive.IsOn && !backgroundPreview ? "auto" : null);
+    }
+
+    private void UpdatePresentation()
+    {
+        screenSettings.Visible = drive.IsOn && drive.Mode == LightMode.Screen;
+        preview.SolidColor = color;
+        brightnessValue.Text = $"{brightness.Value} %";
+        powerState.Text = drive.IsOn ? "Включена" : "Выключена";
+
+    }
+
+    private void RefreshPreview()
+    {
+        if (++displayRefresh % 10 == 0)
+            monitor.RefreshDisplays(monitor.SelectedDisplay?.DeviceName);
+        preview.SetFrame(engine.Preview);
+        var link = engine.Status;
+        badge.UpdateStatus(link.Connected ? "Подключено" :
+            !drive.IsOn ? "Выключено" : "Поиск контроллера", link.Connected, drive.IsOn);
+        status.Text = drive.IsOn && !link.Connected ? link.Message : "";
+        captureStatus.Text = drive.Mode == LightMode.Screen ? engine.CaptureError ?? "" : "";
+    }
+
+    private void BuildColorMenu()
+    {
+        var choices = new (string Name, int Rgb)[]
+        {
+            ("Тёплый белый", 0xFFD6A6), ("Холодный белый", 0xE4EEFF),
+            ("Янтарный", 0xFFB85C), ("Красный", 0xFF605B),
+            ("Розовый", 0xF38EBE), ("Фиолетовый", 0xAB91FF),
+            ("Синий", 0x619DFF), ("Бирюзовый", 0x94DCE4), ("Зелёный", 0x7BDAA3)
+        };
+        foreach (var (name, rgb) in choices)
+        {
+            var shade = Color.FromArgb(unchecked((int)0xFF000000) | rgb);
+            var swatch = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(swatch))
+                Rounded(g, new RectangleF(1, 1, 14, 14), 3, shade);
+            var item = new ToolStripMenuItem(name, swatch) { Tag = shade };
+            item.Click += (_, _) => ApplyColor(shade);
+            colors.Items.Add(item);
+        }
+        colors.Items.Add(new ToolStripSeparator());
+        var custom = new ToolStripMenuItem("Другой цвет…");
+        custom.Click += (_, _) =>
+        {
+            using var dialog = new ColorDialog { Color = color, FullOpen = true };
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+                ApplyColor(dialog.Color);
+        };
+        colors.Items.Add(custom);
+    }
+
+    private sealed class PaletteMenuColors : ProfessionalColorTable
+    {
+        public override Color ToolStripDropDownBackground => WindowStyle.Panel;
+        public override Color ImageMarginGradientBegin => Field;
+        public override Color ImageMarginGradientMiddle => Field;
+        public override Color ImageMarginGradientEnd => Field;
+        public override Color MenuBorder => Border;
+        public override Color MenuItemSelected => Color.FromArgb(52, 69, 79);
+        public override Color MenuItemBorder => Border;
+        public override Color SeparatorDark => Border;
+        public override Color SeparatorLight => WindowStyle.Panel;
+    }
+
+    private void ApplyColor(Color shade)
+    {
+        color = shade;
+        if (drive.IsOn && drive.Mode == LightMode.Screen)
+            drive.Mode = LightMode.Solid;
+        else
+            Changed();
+    }
+
+    private void SaveSettings()
+    {
+        save.Stop();
+        try { files.Save(Current().Settings); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            files.Log("Не удалось сохранить настройки. " + ex.Message);
+            status.Text = "Не удалось сохранить настройки.";
+        }
+    }
+
+    private void OpenLog()
+    {
+        using var dialog = new Form
+        {
+            Text = "Журнал — Контур", StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(720, 370), MinimumSize = new Size(530, 240),
+            Font = Font, BackColor = Background, Padding = new Padding(16)
+        };
+        dialog.HandleCreated += (_, _) => Caption(dialog.Handle);
+        var field = new TextBox
+        {
+            Dock = DockStyle.Fill, ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical,
+            Font = new Font("Consolas", 10), BorderStyle = BorderStyle.None, BackColor = WindowStyle.Panel, ForeColor = WindowStyle.Text
+        };
+        try { field.Text = File.Exists(files.LogFile) ? File.ReadAllText(files.LogFile) : "Пока нет событий."; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { field.Text = ex.Message; }
+        field.SelectionStart = field.TextLength;
+        dialog.Controls.Add(field);
+        field.ScrollToCaret();
+        dialog.ShowDialog(this);
+    }
+
+    private static TableLayoutPanel Table(int columns)
+    {
+        var table = new TableLayoutPanel { ColumnCount = columns, Dock = DockStyle.Fill, Margin = Padding.Empty };
+        if (columns == 1)
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        return table;
+    }
+
+    private static void AddRow(TableLayoutPanel table, Control control, int height)
+    {
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        control.Dock = DockStyle.Fill;
+        table.Controls.Add(control, 0, table.RowCount++);
+    }
+
+    private static TableLayoutPanel SingleRow(int columns)
+    {
+        var table = Table(columns);
+        AddSpace(table);
+        return table;
+    }
+
+    private static void AddSpace(TableLayoutPanel table)
+    {
+        table.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        table.RowCount++;
+    }
+}
