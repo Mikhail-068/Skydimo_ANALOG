@@ -559,6 +559,9 @@ internal sealed class LedPreview : Control
             monitor.Right - 4 * scale, monitor.Bottom - 11 * scale);
         WindowStyle.Satin(g, surface, 2 * scale, Color.FromArgb(24, 38, 55),
             Color.FromArgb(10, 16, 25), Color.FromArgb(5, 8, 12));
+        using var rib = new Pen(Color.FromArgb(55, 62, 69), .65f * scale);
+        for (var x = monitor.Left + 5 * scale; x < monitor.Right - 5 * scale; x += 2 * scale)
+            g.DrawLine(rib, x, monitor.Bottom - 9 * scale, x, monitor.Bottom - 3 * scale);
         using var diode = new SolidBrush(Color.FromArgb(167, 204, 225));
         g.FillEllipse(diode, monitor.Right - 17 * scale, monitor.Bottom - 6 * scale, 4 * scale, 2 * scale);
 
@@ -704,8 +707,10 @@ internal sealed class LedPreview : Control
     private static void DrawStand(Graphics g, RectangleF monitor, float scale)
     {
         var center = monitor.Left + monitor.Width / 2;
-        var baseY = monitor.Bottom + 30 * scale;
-        var shadow = new RectangleF(center - 92 * scale, baseY - 7 * scale, 184 * scale, 31 * scale);
+        var baseY = monitor.Bottom + 34 * scale;
+        var span = 105 * scale;
+        var shadow = new RectangleF(center - span - 15 * scale, baseY - 4 * scale,
+            2 * span + 30 * scale, 26 * scale);
         using var shadowPath = new GraphicsPath();
         shadowPath.AddEllipse(shadow);
         using var shade = new PathGradientBrush(shadowPath)
@@ -715,20 +720,23 @@ internal sealed class LedPreview : Control
         };
         g.FillPath(shade, shadowPath);
 
-        var neck = new RectangleF(center - 9 * scale, monitor.Bottom - 4 * scale, 18 * scale, 39 * scale);
-        using var metal = new LinearGradientBrush(neck, Color.FromArgb(79, 89, 101),
-            Color.FromArgb(23, 29, 36), LinearGradientMode.Horizontal);
+        var neck = new RectangleF(center - 13 * scale, monitor.Bottom - 4 * scale, 26 * scale, 38 * scale);
+        using var metal = new LinearGradientBrush(neck, Color.FromArgb(65, 70, 79),
+            Color.FromArgb(19, 23, 29), LinearGradientMode.Horizontal);
         g.FillRectangle(metal, neck);
-        using var lip = new Pen(Color.FromArgb(116, 128, 142), scale);
-        var baseTop = new RectangleF(center - 61 * scale, baseY, 122 * scale, 15 * scale);
-        var baseEdge = baseTop;
-        baseEdge.Offset(0, 4 * scale);
-        using var edge = new SolidBrush(Color.FromArgb(11, 15, 20));
-        g.FillEllipse(edge, baseEdge);
-        using var top = new LinearGradientBrush(baseTop, Color.FromArgb(79, 89, 102),
-            Color.FromArgb(27, 33, 41), LinearGradientMode.Vertical);
-        g.FillEllipse(top, baseTop);
-        g.DrawArc(lip, baseTop, 14, 152);
+        using var leg = new SolidBrush(Color.FromArgb(38, 43, 51));
+        using var accent = new Pen(Color.FromArgb(179, 39, 53), 2 * scale);
+        using var bevel = new Pen(Color.FromArgb(95, 101, 109), scale);
+        foreach (var side in new[] { -1, 1 })
+        {
+            var joint = new PointF(center + side * 10 * scale, baseY - 7 * scale);
+            var tip = new PointF(center + side * span, baseY + 13 * scale);
+            g.FillPolygon(leg, [joint, tip, new(tip.X, tip.Y + 4 * scale),
+                new(center + side * 8 * scale, baseY + 3 * scale)]);
+            g.DrawLine(accent, joint, tip);
+            g.DrawLine(bevel, new PointF(center + side * 8 * scale, baseY + 3 * scale),
+                new PointF(tip.X, tip.Y + 4 * scale));
+        }
     }
 
     private void DrawCounts(Graphics g, int inset, float scale)

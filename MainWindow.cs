@@ -252,6 +252,8 @@ internal sealed class MainWindow : Form
         BuildPalette();
         refresh.Tick += (_, _) => RefreshPreview();
         save.Tick += (_, _) => SaveSettings();
+        if (!backgroundPreview)
+            BindTray();
         FormClosed += (_, _) =>
         {
             refresh.Stop();
@@ -260,6 +262,49 @@ internal sealed class MainWindow : Form
             refresh.Dispose();
             save.Dispose();
             engine.Dispose();
+        };
+    }
+
+    private void BindTray()
+    {
+        var menu = new ContextMenuStrip();
+        var tray = new NotifyIcon { Icon = Icon, Text = "Контур — подсветка монитора", ContextMenuStrip = menu };
+        var exiting = false;
+
+        void OpenWindow()
+        {
+            Show();
+            if (WindowState == FormWindowState.Minimized)
+                WindowState = FormWindowState.Normal;
+            Activate();
+            tray.Visible = false;
+        }
+
+        menu.Items.Add("Открыть", null, (_, _) => OpenWindow());
+        menu.Items.Add("Выход", null, (_, _) =>
+        {
+            exiting = true;
+            Close();
+        });
+        tray.MouseDoubleClick += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Left)
+                OpenWindow();
+        };
+        FormClosing += (_, e) =>
+        {
+            if (exiting || e.CloseReason != CloseReason.UserClosing)
+                return;
+
+            e.Cancel = true;
+            shadeDrawer?.Retract();
+            tray.Visible = true;
+            Hide();
+        };
+        Disposed += (_, _) =>
+        {
+            tray.Dispose();
+            menu.Dispose();
         };
     }
 
