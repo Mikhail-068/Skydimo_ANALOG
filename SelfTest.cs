@@ -133,14 +133,23 @@ internal static class SelfTest
             Check(!monitor.Visible && preview.Visible, "Настройки режима «Один цвет»");
             CheckLayout(controls);
             CaptureWindow(window, folder, "solid.png");
-            var installation = controls.OfType<StudioButton>().Single(item => item.AccessibleName == "Способ установки");
+            var installation = controls.OfType<StudioButton>().Single(item => item.AccessibleName == "Настройка положения ленты");
             installation.PerformClick();
             PumpWindow(430);
             Check(installation.Text == "Вид спереди", "Переключение на схему установки");
+            var startDrawing = controls.OfType<StudioButton>().Single(item => item.AccessibleName == "Начать рисовать");
+            Check(startDrawing.Visible, "Перед рисованием видна подсказка");
+            CaptureWindow(window, folder, "installation-hint.png");
+            startDrawing.PerformClick();
+            Check(!startDrawing.Visible, "Кнопка открывает холст");
             CaptureWindow(window, folder, "installation.png");
+            var clearRoute = controls.OfType<StudioButton>().Single(item => item.AccessibleName == "Очистить маршрут");
+            Check(clearRoute.Visible && clearRoute.Enabled, "Кнопка очистки доступна на холсте");
+            clearRoute.PerformClick();
+            CaptureWindow(window, folder, "installation-cleared.png");
             installation.PerformClick();
             PumpWindow(430);
-            Check(installation.Text == "Способ установки", "Возврат к виду спереди");
+            Check(installation.Text == "Настройка положения ленты", "Возврат к виду спереди");
 
             slider.AccessibilityObject.Value = "100";
             PumpWindow();

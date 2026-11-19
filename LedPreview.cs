@@ -16,9 +16,16 @@ internal sealed class LedPreview : Control
     private int tick;
     private readonly System.Windows.Forms.Timer directionTimer = new() { Interval = 38 };
     private int directionStep;
+    private bool clearedCanvas;
+    private readonly StudioButton clearRoute = new("Очистить", "Очистить маршрут") { Visible = false };
+    private readonly StudioButton startDrawing = new("Начать рисовать", "Начать рисовать")
+    {
+        Primary = true,
+        Visible = false
+    };
     private readonly System.Windows.Forms.Timer flip = new() { Interval = 15 };
     private readonly System.Diagnostics.Stopwatch flipClock = new();
-    private readonly StudioButton installation = new("Способ установки", "Способ установки");
+    private readonly StudioButton installation = new("Настройка положения ленты", "Настройка положения ленты");
     private float rotation;
     private float flipFrom;
     private bool showRear;
@@ -44,6 +51,8 @@ internal sealed class LedPreview : Control
         set
         {
             stripPath = value;
+            if (value is not null)
+                clearedCanvas = false;
             directionStep = 0;
             wallIndices = value is null ? null : Sk0127.Cells.Select(cell =>
                 Enumerable.Range(0, value.Length).MinBy(index =>
@@ -98,10 +107,12 @@ internal sealed class LedPreview : Control
         installation.Click += (_, _) =>
         {
             showRear = !showRear;
+            startDrawing.Visible = false;
+            clearRoute.Visible = false;
             directionStep = 0;
             directionTimer.Enabled = showRear;
             installation.Primary = showRear;
-            installation.Text = showRear ? "Вид спереди" : "Способ установки";
+            installation.Text = showRear ? "Вид спереди" : "Настройка положения ленты";
             flipFrom = rotation;
             flipClock.Restart();
             flip.Start();
@@ -109,12 +120,25 @@ internal sealed class LedPreview : Control
         };
         Controls.Add(installation);
         Controls.Add(routeProgress);
+        startDrawing.Click += (_, _) =>
+        {
+            startDrawing.Visible = false;
+            clearRoute.Visible = true;
+            directionStep = 0;
+            Invalidate();
+        };
+        Controls.Add(startDrawing);
+        clearRoute.Click += (_, _) => ClearRoute();
+        Controls.Add(clearRoute);
         flip.Tick += (_, _) =>
         {
             var t = Math.Min(1f, (float)flipClock.Elapsed.TotalMilliseconds / 360);
             rotation = flipFrom + ((showRear ? 1f : 0f) - flipFrom) * t * t * (3 - 2 * t);
             if (t >= 1)
+            {
                 flip.Stop();
+                startDrawing.Visible = showRear;
+            }
             Invalidate();
         };
     }
@@ -159,20 +183,24 @@ internal sealed class LedPreview : Control
         base.OnLayout(e);
         var scale = DeviceDpi / 96f;
         var width = (int)(153 * scale);
-        installation.SetBounds((Width - width) / 2, (int)(21 * scale), width, (int)(29 * scale));
+        var installationWidth = (int)(193 * scale);
+        installation.SetBounds((Width - installationWidth) / 2 + (int)(16 * scale), (int)(21 * scale), installationWidth, (int)(29 * scale));
+        var stageCenter = (Height - 51 * scale) / 2;
+        startDrawing.SetBounds((Width - width) / 2, (int)(stageCenter + 65 * scale), width, (int)(29 * scale));
+        var clearWidth = (int)(108 * scale);
+        clearRoute.SetBounds((Width - clearWidth) / 2, (int)(74 * scale), clearWidth, (int)(29 * scale));
         routeProgress.SetBounds((Width - width) / 2, Height - (int)(85 * scale), width, (int)(5 * scale));
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
-        if (!showRear || flip.Enabled || processingRoute || !drawingCanvas.Contains(e.Location))
+        if (!showRear || flip.Enabled || startDrawing.Visible || processingRoute || !drawingCanvas.Contains(e.Location))
             return;
 
         if (e.Button == MouseButtons.Right)
         {
-            StripPath = null;
-            StripPathChanged?.Invoke();
+            ClearRoute();
         }
         else if (e.Button == MouseButtons.Left)
         {
@@ -180,6 +208,15 @@ internal sealed class LedPreview : Control
             Capture = true;
             Invalidate();
         }
+    }
+
+    private void ClearRoute()
+    {
+        if (processingRoute)
+            return;
+        clearedCanvas = true;
+        StripPath = null;
+        StripPathChanged?.Invoke();
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -204,6 +241,7 @@ internal sealed class LedPreview : Control
         var scale = DeviceDpi / 96f;
         processingRoute = true;
         installation.Enabled = false;
+        clearRoute.Enabled = false;
         routeProgress.Visible = true;
         Invalidate();
         try
@@ -221,6 +259,7 @@ internal sealed class LedPreview : Control
             {
                 processingRoute = false;
                 installation.Enabled = true;
+                clearRoute.Enabled = true;
                 routeProgress.Visible = false;
                 Invalidate();
             }
@@ -412,13 +451,70 @@ internal sealed class LedPreview : Control
             return;
         drawingCanvas = stage;
         DrawStage(g, stage, scale);
+        if (startDrawing.Visible)
+            DrawDrawingHint(g, stage, scale);
         if (showRear)
             DrawText(g, processingRoute ? "Выравниваю маршрут…" : flip.Enabled ? "Разворачиваю монитор…" :
-                "Нарисуй ленту мышью · правая кнопка сбрасывает маршрут", wallLabel,
+                startDrawing.Visible ? "" : "Нарисуй ленту мышью", wallLabel,
                 new Rectangle(inset, Height - (int)(111 * scale), Width - 2 * inset, (int)(35 * scale)),
                 WindowStyle.Muted, TextFormatFlags.HorizontalCenter);
         else
             DrawCounts(g, inset, scale);
+    }
+
+    private void DrawDrawingHint(Graphics g, RectangleF stage, float scale)
+    {
+        using var dim = new SolidBrush(Color.FromArgb(158, WindowStyle.Background));
+        using var curtain = WindowStyle.RoundedPath(stage, 8 * scale);
+        g.FillPath(dim, curtain);
+
+        var width = Math.Min(stage.Width - 12 * scale, 390 * scale);
+        var panel = new RectangleF(stage.Left + (stage.Width - width) / 2,
+            stage.Top + stage.Height / 2 - 115 * scale, width, 225 * scale);
+        WindowStyle.Satin(g, panel, 9 * scale, Color.FromArgb(37, 47, 55),
+            WindowStyle.Panel, WindowStyle.Border);
+        void TextLine(string text, Font font, float top, Color color)
+        {
+            var line = new RectangleF(panel.Left + 8 * scale, panel.Top + top * scale, width - 16 * scale, 24 * scale);
+            DrawText(g, text, font, Rectangle.Round(line), color, TextFormatFlags.HorizontalCenter);
+        }
+
+        TextLine("Как провести ленту", heading, 10, WindowStyle.Text);
+        TextLine("Зажми левую кнопку в точке подключения.", wallLabel, 37, WindowStyle.Text);
+        TextLine("Проведи вдоль ленты и отпусти в конце.", wallLabel, 58, WindowStyle.Text);
+
+        var left = panel.Left + width * .29f;
+        var right = panel.Right - width * .29f;
+        var top = panel.Top + 96 * scale;
+        var bottom = panel.Top + 150 * scale;
+        PointF[] route = [new(right, bottom), new(right, top), new(left, top), new(left, bottom)];
+        using var outline = new Pen(WindowStyle.Border, 2 * scale) { DashStyle = DashStyle.Dash };
+        g.DrawLines(outline, route);
+        using var ink = new Pen(WindowStyle.Active, 3 * scale) { EndCap = LineCap.Round, StartCap = LineCap.Round };
+        var progress = Math.Clamp((directionStep - 6) / 54f, 0, 1);
+        var distance = progress * (right - left + 2 * (bottom - top));
+        var cursor = route[0];
+        for (var i = 1; i < route.Length; i++)
+        {
+            var a = route[i - 1];
+            var b = route[i];
+            var length = Math.Abs(b.X - a.X) + Math.Abs(b.Y - a.Y);
+            var t = Math.Clamp(distance / length, 0, 1);
+            cursor = new PointF(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
+            if (t > 0)
+                g.DrawLine(ink, a, cursor);
+            distance -= length;
+            if (distance <= 0)
+                break;
+        }
+        using var pointer = new SolidBrush(WindowStyle.Text);
+        g.FillPolygon(pointer,
+        [
+            cursor,
+            new PointF(cursor.X + 4 * scale, cursor.Y + 14 * scale),
+            new PointF(cursor.X + 7 * scale, cursor.Y + 9 * scale),
+            new PointF(cursor.X + 13 * scale, cursor.Y + 9 * scale)
+        ]);
     }
 
     private void DrawStage(Graphics g, RectangleF stage, float scale)
@@ -540,6 +636,9 @@ internal sealed class LedPreview : Control
             g.DrawLines(backing, draft.Select(Project).ToArray());
             return;
         }
+
+        if (clearedCanvas && stripPath is null)
+            return;
 
         var custom = stripPath?.Select(Project).ToArray();
         var start = custom is not null ? custom[0] : reverseStrip ? rearLeft : rearRight;
