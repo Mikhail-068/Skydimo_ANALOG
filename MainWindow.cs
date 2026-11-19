@@ -14,6 +14,7 @@ internal sealed class MainWindow : Form
     private readonly BrightnessSlider brightness = new();
     private readonly Label brightnessValue = Label("", 15, color: Silver, font: "Bahnschrift");
     private readonly Label powerState = Label("", 9, color: Muted);
+    private ShadeDialog? shadeDrawer;
     private readonly ConnectionBadge badge = new();
     private readonly ConnectionBadge screenLamp = new()
     {
@@ -34,7 +35,7 @@ internal sealed class MainWindow : Form
 
     private readonly LedPreview preview = new();
     private readonly TableLayoutPanel screenSettings = Table(1);
-    private readonly System.Windows.Forms.Timer refresh = new() { Interval = 100 };
+    private readonly System.Windows.Forms.Timer refresh = new() { Interval = 50 };
     private readonly System.Windows.Forms.Timer save = new() { Interval = 350 };
     private Color color;
     private readonly Dictionary<int, int> paletteOverrides;
@@ -66,6 +67,9 @@ internal sealed class MainWindow : Form
         brightness.Value = settings.Brightness;
         drive.Mode = settings.Mode;
         reverse.Checked = settings.Reverse;
+        preview.ReverseStrip = reverse.Checked;
+        preview.StripPath = settings.StripPath is { Length: Sk0127.Count } path ? path : null;
+        reverse.Enabled = preview.StripPath is null;
         color = Color.FromArgb(settings.ColorArgb);
         paletteOverrides = settings.PaletteOverrides ?? new Dictionary<int, int>();
         paletteSlot = settings.PaletteSlot;
@@ -228,11 +232,22 @@ internal sealed class MainWindow : Form
         drive.ValueChanged += (_, _) =>
         {
             var choosing = drive.ChoosingColor;
+            if (!choosing)
+                shadeDrawer?.Retract();
             colorLamp.UpdateStatus(choosing ? "Выбор цвета" : "Выбор цвета закрыт", choosing, choosing);
             Changed();
         };
         monitor.SelectionChanged += (_, _) => Changed();
-        reverse.CheckedChanged += (_, _) => Changed();
+        preview.StripPathChanged += () =>
+        {
+            reverse.Enabled = preview.StripPath is null;
+            Changed();
+        };
+        reverse.CheckedChanged += (_, _) =>
+        {
+            preview.ReverseStrip = reverse.Checked;
+            Changed();
+        };
         brightness.ValueChanged += (_, _) => Changed();
         BuildPalette();
         refresh.Tick += (_, _) => RefreshPreview();
@@ -272,6 +287,7 @@ internal sealed class MainWindow : Form
             PaletteOverrides = paletteOverrides.Count == 0 ? null : new Dictionary<int, int>(paletteOverrides),
             PaletteSlot = paletteSlot,
             Mode = drive.Mode,
+            StripPath = preview.StripPath,
             Reverse = reverse.Checked
         }, selected?.Bounds ?? Rectangle.Empty, drive.IsOn, drive.IsOn && !backgroundPreview ? "auto" : null);
     }
@@ -310,7 +326,7 @@ internal sealed class MainWindow : Form
         };
         colors.Name = "ColorPalette";
         colors.AccessibleName = "Цвет ленты";
-        colors.BackColor = Field;
+        colors.BackColor = Color.FromArgb(20, 24, 28);
         colors.Padding = new Padding(6);
         for (var column = 0; column < 3; column++)
             colors.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
@@ -333,6 +349,7 @@ internal sealed class MainWindow : Form
                 paletteSlot = slot;
             button.Click += (_, _) =>
             {
+                shadeDrawer?.Retract();
                 paletteSlot = slot;
                 SelectColor(button.Swatch ?? shade);
             };
@@ -342,9 +359,29 @@ internal sealed class MainWindow : Form
         var custom = new StudioButton("Другой цвет…", "Другой цвет…") { Dock = DockStyle.Fill, Margin = new Padding(3) };
         custom.Click += (_, _) =>
         {
-            using var dialog = new ColorDialog { Color = color, FullOpen = true };
-            if (dialog.ShowDialog(this) == DialogResult.OK)
-                ReplaceSelectedPaletteColor(dialog.Color);
+            if (shadeDrawer is not null)
+            {
+                shadeDrawer.Retract();
+                return;
+            }
+
+            var drawer = new ShadeDialog(color);
+            shadeDrawer = drawer;
+            drawer.PreviewChanged += shade =>
+            {
+                if (drawer.IsRetracting)
+                    return;
+                var current = Current();
+                engine.Update(current with { Settings = current.Settings with { ColorArgb = shade.ToArgb() } });
+            };
+            drawer.ShadeAccepted += ReplaceSelectedPaletteColor;
+            drawer.FormClosed += (_, _) =>
+            {
+                shadeDrawer = null;
+                if (!Disposing && !IsDisposed)
+                    engine.Update(Current());
+            };
+            drawer.ShowBeside(this, colors);
         };
         customColor = custom;
         colors.Controls.Add(custom, 0, 3);

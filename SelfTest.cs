@@ -133,6 +133,14 @@ internal static class SelfTest
             Check(!monitor.Visible && preview.Visible, "Настройки режима «Один цвет»");
             CheckLayout(controls);
             CaptureWindow(window, folder, "solid.png");
+            var installation = controls.OfType<StudioButton>().Single(item => item.AccessibleName == "Способ установки");
+            installation.PerformClick();
+            PumpWindow(430);
+            Check(installation.Text == "Вид спереди", "Переключение на схему установки");
+            CaptureWindow(window, folder, "installation.png");
+            installation.PerformClick();
+            PumpWindow(430);
+            Check(installation.Text == "Способ установки", "Возврат к виду спереди");
 
             slider.AccessibilityObject.Value = "100";
             PumpWindow();
@@ -160,7 +168,7 @@ internal static class SelfTest
             Check(drive.Mode == LightMode.Screen && !palette.Visible, "Правая ветка не открывает палитру");
 
             drive.AccessibilityObject.Value = "Выключено";
-            PumpWindow(340);
+            PumpWindow(1000);
             Check(!drive.IsOn && drive.Mode == LightMode.Screen, "Выключение сохраняет режим");
             CaptureWindow(window, folder, "off.png");
             drive.AccessibilityObject.Value = "Один цвет";

@@ -68,6 +68,7 @@ internal sealed record LightSettings
     public int? PaletteSlot { get; init; }
     public LightMode Mode { get; init; } = LightMode.Solid;
     public bool Reverse { get; init; }
+    public PointF[]? StripPath { get; init; }
 }
 
 internal sealed class LocalFiles

@@ -14,6 +14,58 @@ internal sealed class LedPreview : Control
     private readonly Bitmap spill = new(Sk0127.Columns, Sk0127.Rows);
     private readonly Font codeFont = new("Consolas", 10);
     private int tick;
+    private readonly System.Windows.Forms.Timer directionTimer = new() { Interval = 38 };
+    private int directionStep;
+    private readonly System.Windows.Forms.Timer flip = new() { Interval = 15 };
+    private readonly System.Diagnostics.Stopwatch flipClock = new();
+    private readonly StudioButton installation = new("Способ установки", "Способ установки");
+    private float rotation;
+    private float flipFrom;
+    private bool showRear;
+    private RectangleF rearSurface;
+    private RectangleF drawingCanvas;
+    private bool processingRoute;
+    private readonly ProgressBar routeProgress = new()
+    {
+        Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 28,
+        Visible = false, AccessibleName = "Выравнивание маршрута"
+    };
+    private List<PointF>? drawing;
+    private PointF[]? stripPath;
+    private int[]? wallIndices;
+    private Rgb[] routePixels = new Rgb[Sk0127.Count];
+    private bool reverseStrip;
+
+    public event Action? StripPathChanged;
+
+    public PointF[]? StripPath
+    {
+        get => stripPath;
+        set
+        {
+            stripPath = value;
+            directionStep = 0;
+            wallIndices = value is null ? null : Sk0127.Cells.Select(cell =>
+                Enumerable.Range(0, value.Length).MinBy(index =>
+                {
+                    var x = (1 - value[index].X) * (Sk0127.Columns - 1) - cell.X;
+                    var y = value[index].Y * (Sk0127.Rows - 1) - cell.Y;
+                    return x * x + y * y;
+                })).ToArray();
+            SetFrame(routePixels);
+            Invalidate();
+        }
+    }
+
+    public bool ReverseStrip
+    {
+        get => reverseStrip;
+        set
+        {
+            reverseStrip = value;
+            Invalidate();
+        }
+    }
     private static readonly string[] Code = [
         "namespace Kontur.Rendering;", "",
         "var frame = await capture.NextAsync();",
@@ -36,10 +88,42 @@ internal sealed class LedPreview : Control
         Margin = Padding.Empty;
         animation.Tick += (_, _) => { if (Visible && FindForm()?.WindowState != FormWindowState.Minimized) { tick++; Invalidate(); } };
         animation.Start();
+        directionTimer.Tick += (_, _) =>
+        {
+            if (!Visible || FindForm()?.WindowState == FormWindowState.Minimized || flip.Enabled || processingRoute || drawing is not null)
+                return;
+            directionStep = (directionStep + 1) % (Sk0127.Count + 12);
+            Invalidate();
+        };
+        installation.Click += (_, _) =>
+        {
+            showRear = !showRear;
+            directionStep = 0;
+            directionTimer.Enabled = showRear;
+            installation.Primary = showRear;
+            installation.Text = showRear ? "Вид спереди" : "Способ установки";
+            flipFrom = rotation;
+            flipClock.Restart();
+            flip.Start();
+            installation.Invalidate();
+        };
+        Controls.Add(installation);
+        Controls.Add(routeProgress);
+        flip.Tick += (_, _) =>
+        {
+            var t = Math.Min(1f, (float)flipClock.Elapsed.TotalMilliseconds / 360);
+            rotation = flipFrom + ((showRear ? 1f : 0f) - flipFrom) * t * t * (3 - 2 * t);
+            if (t >= 1)
+                flip.Stop();
+            Invalidate();
+        };
     }
 
     public void SetFrame(Rgb[] value)
     {
+        routePixels = value;
+        if (wallIndices is not null)
+            value = wallIndices.Select(index => routePixels[index]).ToArray();
         if (value.AsSpan().SequenceEqual(pixels))
             return;
         pixels = value;
@@ -70,6 +154,246 @@ internal sealed class LedPreview : Control
         }
     }
 
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e);
+        var scale = DeviceDpi / 96f;
+        var width = (int)(153 * scale);
+        installation.SetBounds((Width - width) / 2, (int)(21 * scale), width, (int)(29 * scale));
+        routeProgress.SetBounds((Width - width) / 2, Height - (int)(85 * scale), width, (int)(5 * scale));
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (!showRear || flip.Enabled || processingRoute || !drawingCanvas.Contains(e.Location))
+            return;
+
+        if (e.Button == MouseButtons.Right)
+        {
+            StripPath = null;
+            StripPathChanged?.Invoke();
+        }
+        else if (e.Button == MouseButtons.Left)
+        {
+            drawing = [Normalize(e.Location)];
+            Capture = true;
+            Invalidate();
+        }
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (drawing is null)
+            return;
+        AddPoint(e.Location);
+    }
+
+    protected override async void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (e.Button != MouseButtons.Left || drawing is null)
+            return;
+
+        AddPoint(e.Location);
+        var stroke = drawing;
+        drawing = null;
+        Capture = false;
+        var size = rearSurface.Size;
+        var scale = DeviceDpi / 96f;
+        processingRoute = true;
+        installation.Enabled = false;
+        routeProgress.Visible = true;
+        Invalidate();
+        try
+        {
+            var route = await Task.Run(() => BuildRoute(stroke, size, scale));
+            if (!IsDisposed && route is not null)
+            {
+                StripPath = route;
+                StripPathChanged?.Invoke();
+            }
+        }
+        finally
+        {
+            if (!IsDisposed)
+            {
+                processingRoute = false;
+                installation.Enabled = true;
+                routeProgress.Visible = false;
+                Invalidate();
+            }
+        }
+    }
+
+    private static PointF[]? BuildRoute(List<PointF> stroke, SizeF surface, float scale)
+    {
+        var points = Straighten(stroke, surface, scale);
+        var lengths = new double[points.Count];
+        for (var i = 1; i < points.Count; i++)
+        {
+            var dx = (points[i].X - points[i - 1].X) * surface.Width;
+            var dy = (points[i].Y - points[i - 1].Y) * surface.Height;
+            lengths[i] = lengths[i - 1] + Math.Sqrt(dx * dx + dy * dy);
+        }
+        var total = lengths[^1];
+        if (points.Count > 1 && total >= 12 * scale)
+        {
+            var sampled = new PointF[Sk0127.Count];
+            sampled[0] = points[0];
+            var previousIndex = 0;
+            for (var segment = 1; segment < points.Count; segment++)
+            {
+                var idealIndex = (int)Math.Round(lengths[segment] / total * (sampled.Length - 1));
+                var lastIndex = sampled.Length - points.Count + segment;
+                var index = Math.Clamp(idealIndex, previousIndex + 1, lastIndex);
+                var a = points[segment - 1];
+                var b = points[segment];
+                for (var i = previousIndex + 1; i <= index; i++)
+                {
+                    var t = (float)(i - previousIndex) / (index - previousIndex);
+                    sampled[i] = new PointF(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
+                }
+                previousIndex = index;
+            }
+            return sampled;
+        }
+        return null;
+    }
+
+    private static List<PointF> Straighten(List<PointF> stroke, SizeF surface, float scale)
+    {
+        var width = surface.Width;
+        var height = surface.Height;
+        var points = stroke.Select(point => new PointF(point.X * width, point.Y * height)).ToArray();
+        var keep = new bool[points.Length];
+        keep[0] = keep[^1] = true;
+        var pending = new Stack<(int First, int Last)>();
+        pending.Push((0, points.Length - 1));
+        var tolerance = 14 * scale;
+
+        var vertexCount = Math.Min(2, points.Length);
+        while (vertexCount < Sk0127.Count && pending.TryPop(out var segment))
+        {
+            var first = points[segment.First];
+            var last = points[segment.Last];
+            var dx = last.X - first.X;
+            var dy = last.Y - first.Y;
+            var lengthSquared = dx * dx + dy * dy;
+            var threshold = tolerance * tolerance;
+            var split = -1;
+            for (var i = segment.First + 1; i < segment.Last; i++)
+            {
+                var x = points[i].X - first.X;
+                var y = points[i].Y - first.Y;
+                var t = lengthSquared == 0 ? 0 : Math.Clamp((x * dx + y * dy) / lengthSquared, 0, 1);
+                x -= dx * t;
+                y -= dy * t;
+                var distance = x * x + y * y;
+                if (distance > threshold)
+                {
+                    threshold = distance;
+                    split = i;
+                }
+            }
+
+            if (split >= 0)
+            {
+                keep[split] = true;
+                vertexCount++;
+                pending.Push((segment.First, split));
+                pending.Push((split, segment.Last));
+            }
+        }
+
+        var vertices = points.Where((_, index) => keep[index]).ToList();
+        for (var i = 1; i + 2 < vertices.Count; i++)
+        {
+            var before = NearAxis(vertices[i - 1], vertices[i]);
+            var after = NearAxis(vertices[i + 1], vertices[i + 2]);
+            if (before == 0 || after == 0 || before == after || NearAxis(vertices[i], vertices[i + 1]) != 0)
+                continue;
+
+            var bevel = Length(vertices[i], vertices[i + 1]);
+            var adjacent = Math.Min(Length(vertices[i - 1], vertices[i]), Length(vertices[i + 1], vertices[i + 2]));
+            if (bevel > adjacent * .4f || bevel > Math.Min(width, height) * .25f)
+                continue;
+
+            var a = vertices[i];
+            var b = vertices[i + 1];
+            vertices[i] = before == 1 ? new PointF(b.X, a.Y) : new PointF(a.X, b.Y);
+            vertices.RemoveAt(i + 1);
+        }
+
+        var corners = vertices.ToArray();
+        var aligned = (PointF[])corners.Clone();
+        for (var i = 0; i < corners.Length - 1;)
+        {
+            var axis = Axis(corners[i], corners[i + 1]);
+            var end = i + 1;
+            while (end < corners.Length - 1 && Axis(corners[end], corners[end + 1]) == axis)
+                end++;
+            var x = (corners[i].X + corners[end].X) / 2;
+            var y = (corners[i].Y + corners[end].Y) / 2;
+            for (var j = i; j <= end; j++)
+                aligned[j] = axis == 1 ? new PointF(aligned[j].X, y) : new PointF(x, aligned[j].Y);
+            i = end;
+        }
+
+        var normalized = new List<PointF>(aligned.Length);
+        foreach (var point in aligned)
+        {
+            var next = new PointF(point.X / width, point.Y / height);
+            if (normalized.Count == 0 || normalized[^1] != next)
+                normalized.Add(next);
+        }
+        return normalized;
+
+        static float Length(PointF a, PointF b)
+        {
+            var dx = a.X - b.X;
+            var dy = a.Y - b.Y;
+            return MathF.Sqrt(dx * dx + dy * dy);
+        }
+
+        static int Axis(PointF first, PointF last) =>
+            Math.Abs(last.X - first.X) >= Math.Abs(last.Y - first.Y) ? 1 : 2;
+
+        static int NearAxis(PointF first, PointF last)
+        {
+            var x = Math.Abs(last.X - first.X);
+            var y = Math.Abs(last.Y - first.Y);
+            if (y <= x * .28f)
+                return 1;
+            return x <= y * .28f ? 2 : 0;
+        }
+    }
+
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (drawing is not null && !Capture)
+        {
+            drawing = null;
+            Invalidate();
+        }
+    }
+
+    private PointF Normalize(Point point) => new(
+        Math.Clamp((point.X - rearSurface.Left) / rearSurface.Width, 0, 1),
+        Math.Clamp((point.Y - rearSurface.Top) / rearSurface.Height, 0, 1));
+
+    private void AddPoint(Point location)
+    {
+        var point = Normalize(location);
+        if (drawing is not null && drawing[^1] != point)
+        {
+            drawing.Add(point);
+            Invalidate();
+        }
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
@@ -86,8 +410,15 @@ internal sealed class LedPreview : Control
         var stage = RectangleF.FromLTRB(inset, 65 * scale, Width - inset, Height - 116 * scale);
         if (stage.Width < 80 * scale || stage.Height < 80 * scale)
             return;
+        drawingCanvas = stage;
         DrawStage(g, stage, scale);
-        DrawCounts(g, inset, scale);
+        if (showRear)
+            DrawText(g, processingRoute ? "Выравниваю маршрут…" : flip.Enabled ? "Разворачиваю монитор…" :
+                "Нарисуй ленту мышью · правая кнопка сбрасывает маршрут", wallLabel,
+                new Rectangle(inset, Height - (int)(111 * scale), Width - 2 * inset, (int)(35 * scale)),
+                WindowStyle.Muted, TextFormatFlags.HorizontalCenter);
+        else
+            DrawCounts(g, inset, scale);
     }
 
     private void DrawStage(Graphics g, RectangleF stage, float scale)
@@ -105,7 +436,12 @@ internal sealed class LedPreview : Control
         var rail = RectangleF.FromLTRB(monitor.Left - 12 * scale, monitor.Top - 12 * scale,
             monitor.Right + 12 * scale, monitor.Bottom);
         ambient.Draw(g, stage, rail, pixels);
-        DrawMonitor(g, monitor, scale);
+        var apparentWidth = monitor.Width * Math.Max(.045f, (float)Math.Abs(Math.Cos(rotation * Math.PI)));
+        monitor.Inflate((apparentWidth - monitor.Width) / 2, 0);
+        if (rotation >= .5f)
+            DrawRear(g, monitor, scale);
+        else
+            DrawMonitor(g, monitor, scale);
         g.Restore(canvas);
     }
 
@@ -119,6 +455,9 @@ internal sealed class LedPreview : Control
             Color.FromArgb(6, 8, 11), Color.FromArgb(10, 13, 16));
         WindowStyle.Satin(g, monitor, 5 * scale, Color.FromArgb(59, 66, 74),
             Color.FromArgb(29, 35, 42), Color.FromArgb(106, 119, 133));
+
+        if (flip.Enabled)
+            return;
 
         var surface = RectangleF.FromLTRB(monitor.Left + 4 * scale, monitor.Top + 4 * scale,
             monitor.Right - 4 * scale, monitor.Bottom - 11 * scale);
@@ -169,6 +508,99 @@ internal sealed class LedPreview : Control
         g.Restore(clipped);
     }
 
+
+    private void DrawRear(Graphics g, RectangleF monitor, float scale)
+    {
+        DrawStand(g, monitor, scale);
+        WindowStyle.Satin(g, monitor, 7 * scale, Color.FromArgb(47, 54, 60),
+            Color.FromArgb(15, 19, 23), Color.FromArgb(88, 97, 103));
+        if (flip.Enabled)
+            return;
+
+        var mount = new RectangleF(monitor.Left + monitor.Width * .42f, monitor.Top + monitor.Height * .38f,
+            monitor.Width * .16f, monitor.Height * .30f);
+        WindowStyle.Satin(g, mount, 5 * scale, Color.FromArgb(45, 50, 54),
+            Color.FromArgb(22, 26, 29), Color.FromArgb(65, 72, 77));
+        var inset = 13 * scale;
+        var left = monitor.Left + inset;
+        var right = monitor.Right - inset;
+        var top = monitor.Top + inset;
+        var bottom = monitor.Bottom - 28 * scale;
+        rearSurface = RectangleF.FromLTRB(left, top, right, bottom);
+        var rearLeft = new PointF(left, bottom);
+        var rearRight = new PointF(right, bottom);
+        PointF Project(PointF point) => new(left + point.X * (right - left), top + point.Y * (bottom - top));
+        using var backing = new Pen(Color.FromArgb(85, 91, 93), 6 * scale)
+        {
+            LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round
+        };
+        if (drawing is { Count: > 1 } draft)
+        {
+            backing.Color = WindowStyle.Active;
+            g.DrawLines(backing, draft.Select(Project).ToArray());
+            return;
+        }
+
+        var custom = stripPath?.Select(Project).ToArray();
+        var start = custom is not null ? custom[0] : reverseStrip ? rearLeft : rearRight;
+        var outward = start.X < monitor.Left + monitor.Width / 2 ? -1 : 1;
+        Color[] insulation = [Color.FromArgb(183, 85, 79), Color.FromArgb(171, 181, 154), Color.FromArgb(103, 126, 141)];
+        using var wire = new Pen(Color.Empty, 1.15f * scale) { EndCap = LineCap.Round };
+        for (var i = 0; i < insulation.Length; i++)
+        {
+            var x = start.X + (i - 1) * 2.6f * scale;
+            wire.Color = insulation[i];
+            g.DrawBezier(wire, x, start.Y, x, start.Y + 17 * scale,
+                x + outward * 12 * scale, start.Y + 12 * scale,
+                x + outward * (19 + i * 2) * scale, start.Y + (53 + i * 2) * scale);
+        }
+        g.DrawLines(backing, custom ?? [rearLeft, new(left, top), new(right, top), rearRight]);
+        using var diode = new SolidBrush(Color.Empty);
+        var size = 3 * scale;
+        for (var i = 0; i < Sk0127.Count; i++)
+        {
+            var cell = Sk0127.Cells[i];
+            var point = custom is not null ? custom[i] : new PointF(
+                right - (right - left) * cell.X / (Sk0127.Columns - 1),
+                top + (bottom - top) * cell.Y / (Sk0127.Rows - 1));
+            var pixel = routePixels[i];
+            diode.Color = pixel == default ? Color.FromArgb(216, 207, 169) : pixel.PreviewColor;
+            g.FillRectangle(diode, point.X - size / 2, point.Y - size / 2, size, size);
+
+            var orderedIndex = custom is null && reverseStrip ? Sk0127.Count - 1 - i : i;
+            var trail = directionStep - orderedIndex;
+            if (trail is >= 0 and < 6)
+            {
+                var radius = (6f - trail * .65f) * scale;
+                diode.Color = Color.FromArgb(110 - trail * 15, WindowStyle.Active);
+                g.FillEllipse(diode, point.X - radius, point.Y - radius, radius * 2, radius * 2);
+                diode.Color = Color.FromArgb(255 - trail * 28, 171, 255, 227);
+                g.FillRectangle(diode, point.X - size / 2, point.Y - size / 2, size, size);
+            }
+        }
+
+        if (custom is not null)
+        {
+            DrawEndpoint(custom[0], true, custom[0].X < monitor.Left + monitor.Width / 2);
+            DrawEndpoint(custom[^1], false, custom[^1].X < monitor.Left + monitor.Width / 2);
+        }
+        else
+        {
+            DrawEndpoint(rearLeft, reverseStrip, true);
+            DrawEndpoint(rearRight, !reverseStrip, false);
+        }
+
+        void DrawEndpoint(PointF point, bool start, bool onLeft)
+        {
+            var color = start ? WindowStyle.Active : WindowStyle.Silver;
+            WindowStyle.Rounded(g, new RectangleF(point.X - 5 * scale, point.Y - 5 * scale, 10 * scale, 10 * scale),
+                5 * scale, color);
+            var x = onLeft ? point.X + 10 * scale : point.X - 80 * scale;
+            DrawText(g, start ? "Начало" : "Конец", wallLabel,
+                Rectangle.Round(new RectangleF(x, point.Y - 13 * scale, 70 * scale, 26 * scale)),
+                color, onLeft ? TextFormatFlags.Left : TextFormatFlags.Right);
+        }
+    }
 
     private static void DrawStand(Graphics g, RectangleF monitor, float scale)
     {
@@ -223,6 +655,8 @@ internal sealed class LedPreview : Control
         if (disposing)
         {
             animation.Dispose();
+            flip.Dispose();
+            directionTimer.Dispose();
             ambient.Dispose();
             spill.Dispose();
             codeFont.Dispose();

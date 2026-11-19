@@ -324,27 +324,70 @@ internal sealed class StudioButton : Button
         var scale = DeviceDpi / 96f;
         var bounds = new RectangleF(.5f, .5f, Width - 1, Height - 1);
         var edge = Focused && ShowFocusCues ? WindowStyle.Accent : filled ? WindowStyle.Silver : WindowStyle.Border;
+        if (Swatch is Color color)
+        {
+            DrawFuse(g, bounds, scale, color, hovered, filled);
+            return;
+        }
+
         if (filled)
             WindowStyle.Satin(g, bounds, 6 * scale, hovered ? Color.White : WindowStyle.Silver,
                 Color.FromArgb(142, 159, 178), edge, edge);
         else
             WindowStyle.Satin(g, bounds, 6 * scale, hovered ? Color.FromArgb(45, 56, 68) : Color.FromArgb(37, 46, 56),
                 WindowStyle.Field, edge, edge);
-        var textBounds = ClientRectangle;
-        var format = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
-        if (Swatch is Color color)
-        {
-            var size = 16 * scale;
-            WindowStyle.Rounded(g, new RectangleF(12 * scale, (Height - size) / 2, size, size), 4 * scale, color);
-            textBounds.X = (int)(38 * scale);
-            textBounds.Width -= textBounds.X + (int)(12 * scale);
-            format |= TextFormatFlags.Left;
-        }
-        else
-        {
-            format |= TextFormatFlags.HorizontalCenter;
-        }
-        TextRenderer.DrawText(g, Text, Font, textBounds, ink, format);
+        TextRenderer.DrawText(g, Text, Font, ClientRectangle, ink,
+            TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter |
+            TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
+
+    private void DrawFuse(Graphics g, RectangleF socket, float scale, Color color, bool hovered, bool selected)
+    {
+        WindowStyle.Satin(g, socket, 5 * scale, Color.FromArgb(10, 13, 16),
+            Color.FromArgb(27, 32, 37), Color.FromArgb(49, 57, 63));
+        var body = RectangleF.Inflate(socket, -10 * scale, -3 * scale);
+        if (body.Width <= 2 || body.Height <= 2)
+            return;
+
+        var depth = body;
+        depth.Offset(0, 2 * scale);
+        WindowStyle.Rounded(g, depth, 4 * scale, Color.FromArgb(5, 7, 9));
+
+        var edge = Focused && ShowFocusCues ? WindowStyle.Accent : selected ? Color.White :
+            Color.FromArgb(175, color);
+        var top = Color.FromArgb((color.R + 56) / 2, (color.G + 59) / 2, (color.B + 64) / 2);
+        var bottom = Color.FromArgb(color.R / 4, color.G / 4, color.B / 4);
+        WindowStyle.Satin(g, body, 4 * scale, top, bottom, edge);
+
+        var cap = RectangleF.Inflate(body, -2 * scale, -2 * scale);
+        WindowStyle.Satin(g, cap, 3 * scale, Color.FromArgb(185, color),
+            Color.FromArgb(55, color), Color.FromArgb(78, Color.White));
+
+        var centerY = cap.Top + cap.Height / 2;
+        var leftContact = cap.Left + 5 * scale;
+        var rightContact = cap.Right - 5 * scale;
+        using var metal = new Pen(Color.FromArgb(105, 223, 218, 198), scale);
+        g.DrawLines(metal,
+        [
+            new PointF(leftContact, centerY),
+            new PointF(leftContact + 4 * scale, centerY),
+            new PointF(leftContact + 7 * scale, cap.Bottom - 3 * scale),
+            new PointF(rightContact - 7 * scale, cap.Bottom - 3 * scale),
+            new PointF(rightContact - 4 * scale, centerY),
+            new PointF(rightContact, centerY)
+        ]);
+        using var contact = new SolidBrush(Color.FromArgb(218, 231, 227, 209));
+        g.FillRectangle(contact, leftContact - scale, centerY - 2 * scale, 3 * scale, 4 * scale);
+        g.FillRectangle(contact, rightContact - 2 * scale, centerY - 2 * scale, 3 * scale, 4 * scale);
+
+        using var reflection = new Pen(Color.FromArgb(135, Color.White), scale);
+        g.DrawLine(reflection, cap.Left + 4 * scale, cap.Top + scale, cap.Right - 4 * scale, cap.Top + scale);
+        var label = RectangleF.Inflate(cap, -8 * scale, 0);
+        var ink = color.GetBrightness() > .68f ? Color.FromArgb(18, 21, 24) : Color.FromArgb(248, 245, 232);
+        using var fuseFont = new Font(Font.FontFamily, Font.Size * .88f, Font.Style);
+        TextRenderer.DrawText(g, Text, fuseFont, Rectangle.Round(label), ink,
+            TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter |
+            TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 }
 

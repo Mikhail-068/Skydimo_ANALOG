@@ -13,7 +13,7 @@ internal sealed class DesktopCapture : IDisposable
     private readonly Bitmap bitmap = new(Width, Height, PixelFormat.Format32bppRgb);
     private readonly byte[] buffer = new byte[Width * Height * 4];
 
-    public Rgb[] Read(Rectangle display)
+    public Rgb[] Read(Rectangle display, PointF[]? stripPath = null)
     {
         Stretch(display);
         var bits = bitmap.LockBits(new Rectangle(0, 0, Width, Height), ImageLockMode.ReadOnly, bitmap.PixelFormat);
@@ -26,6 +26,11 @@ internal sealed class DesktopCapture : IDisposable
         {
             bitmap.UnlockBits(bits);
         }
+
+        if (stripPath is { Length: Sk0127.Count })
+            return stripPath.Select(point => Average(
+                Math.Clamp((int)Math.Round((1 - point.X) * (Sk0127.Columns - 1)), 0, Sk0127.Columns - 1),
+                Math.Clamp((int)Math.Round(point.Y * (Sk0127.Rows - 1)), 0, Sk0127.Rows - 1))).ToArray();
 
         return Sk0127.Cells.Select(point => Average(point.X, point.Y)).ToArray();
     }
