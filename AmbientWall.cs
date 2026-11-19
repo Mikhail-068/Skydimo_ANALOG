@@ -13,22 +13,32 @@ internal sealed class AmbientWall : IDisposable
     private RectangleF lastStage;
     private RectangleF lastRail;
     private Rgb[]? lastFrame;
+    private bool lastFeatherEdges;
 
-    public void Draw(Graphics graphics, RectangleF stage, RectangleF rail, Rgb[] frame)
+    public void Draw(Graphics graphics, RectangleF stage, RectangleF rail, Rgb[] frame, float opacity = 1, bool featherEdges = false)
     {
-        if (!ReferenceEquals(lastFrame, frame) || stage != lastStage || rail != lastRail)
+        if (!ReferenceEquals(lastFrame, frame) || stage != lastStage || rail != lastRail || featherEdges != lastFeatherEdges)
         {
-            Fill(stage, rail, frame);
+            Fill(stage, rail, frame, featherEdges);
+            lastFeatherEdges = featherEdges;
             lastFrame = frame;
             lastStage = stage;
             lastRail = rail;
         }
 
         graphics.InterpolationMode = InterpolationMode.HighQualityBilinear;
-        graphics.DrawImage(texture, stage);
+        if (opacity >= 1)
+        {
+            graphics.DrawImage(texture, stage);
+            return;
+        }
+
+        using var attributes = new ImageAttributes();
+        attributes.SetColorMatrix(new ColorMatrix { Matrix33 = opacity });
+        graphics.DrawImage(texture, Rectangle.Round(stage), 0, 0, Width, Height, GraphicsUnit.Pixel, attributes);
     }
 
-    private void Fill(RectangleF stage, RectangleF rail, Rgb[] frame)
+    private void Fill(RectangleF stage, RectangleF rail, Rgb[] frame, bool featherEdges)
     {
         var palette = frame.Select(pixel => pixel.PreviewColor).ToArray();
         var softened = new Color[palette.Length];
@@ -64,7 +74,16 @@ internal sealed class AmbientWall : IDisposable
                 var l = Falloff(xLeft * xLeft + ySide * ySide, near, far);
                 var t = Falloff(xTop * xTop + yTop * yTop, near, far);
                 var r = Falloff(xRight * xRight + ySide * ySide, near, far);
-                buffer[y * Width + x] = Pixel(left[y], top[x], right[y], l, t, r);
+                var pixel = Pixel(left[y], top[x], right[y], l, t, r);
+                if (featherEdges)
+                {
+                    var edgeX = Math.Min(x, Width - 1 - x) / (Width * .13f);
+                    var edgeY = Math.Min(y, Height - 1 - y) / (Height * .13f);
+                    var edge = Math.Min(1f, Math.Min(edgeX, edgeY));
+                    var alpha = (int)((int)((uint)pixel >> 24) * edge * edge * (3 - 2 * edge));
+                    pixel = (pixel & 0x00ffffff) | (alpha << 24);
+                }
+                buffer[y * Width + x] = pixel;
             }
         }
 

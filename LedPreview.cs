@@ -25,6 +25,7 @@ internal sealed class LedPreview : Control
     };
     private readonly System.Windows.Forms.Timer flip = new() { Interval = 15 };
     private readonly System.Diagnostics.Stopwatch flipClock = new();
+    internal StudioButton MonitorChoice { get; } = new("Выбор монитора", "Выбор монитора");
     private readonly StudioButton installation = new("Настройка положения ленты", "Настройка положения ленты");
     private float rotation;
     private float flipFrom;
@@ -118,6 +119,7 @@ internal sealed class LedPreview : Control
             flip.Start();
             installation.Invalidate();
         };
+        Controls.Add(MonitorChoice);
         Controls.Add(installation);
         Controls.Add(routeProgress);
         startDrawing.Click += (_, _) =>
@@ -184,7 +186,8 @@ internal sealed class LedPreview : Control
         var scale = DeviceDpi / 96f;
         var width = (int)(153 * scale);
         var installationWidth = (int)(193 * scale);
-        installation.SetBounds((Width - installationWidth) / 2 + (int)(16 * scale), (int)(21 * scale), installationWidth, (int)(29 * scale));
+        MonitorChoice.SetBounds((int)(24 * scale), (int)(21 * scale), (int)(128 * scale), (int)(29 * scale));
+        installation.SetBounds(MonitorChoice.Right + (int)(8 * scale), MonitorChoice.Top, installationWidth, MonitorChoice.Height);
         var stageCenter = (Height - 51 * scale) / 2;
         startDrawing.SetBounds((Width - width) / 2, (int)(stageCenter + 65 * scale), width, (int)(29 * scale));
         var clearWidth = (int)(108 * scale);
@@ -441,10 +444,6 @@ internal sealed class LedPreview : Control
         WindowStyle.Satin(g, new RectangleF(.5f, .5f, Width - 1, Height - 1), 12 * scale, Color.FromArgb(31, 41, 53), WindowStyle.Panel, WindowStyle.Border);
 
         var inset = (int)(24 * scale);
-        DrawText(g, "Предпросмотр", heading, new Rectangle(inset, (int)(19 * scale), Width - 2 * inset, (int)(33 * scale)),
-            WindowStyle.Text, TextFormatFlags.Left);
-        DrawText(g, "65 светодиодов", wallLabel, new Rectangle(inset, (int)(19 * scale), Width - 2 * inset, (int)(33 * scale)),
-            WindowStyle.Muted, TextFormatFlags.Right);
 
         var stage = RectangleF.FromLTRB(inset, 65 * scale, Width - inset, Height - 116 * scale);
         if (stage.Width < 80 * scale || stage.Height < 80 * scale)
@@ -704,7 +703,7 @@ internal sealed class LedPreview : Control
         }
     }
 
-    private static void DrawStand(Graphics g, RectangleF monitor, float scale)
+    internal static void DrawStand(Graphics g, RectangleF monitor, float scale, Color? accentColor = null)
     {
         var center = monitor.Left + monitor.Width / 2;
         var baseY = monitor.Bottom + 34 * scale;
@@ -725,7 +724,7 @@ internal sealed class LedPreview : Control
             Color.FromArgb(19, 23, 29), LinearGradientMode.Horizontal);
         g.FillRectangle(metal, neck);
         using var leg = new SolidBrush(Color.FromArgb(38, 43, 51));
-        using var accent = new Pen(Color.FromArgb(179, 39, 53), 2 * scale);
+        using var accent = new Pen(accentColor ?? Color.FromArgb(179, 39, 53), 2 * scale);
         using var bevel = new Pen(Color.FromArgb(95, 101, 109), scale);
         foreach (var side in new[] { -1, 1 })
         {

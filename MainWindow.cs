@@ -9,6 +9,10 @@ internal sealed class MainWindow : Form
     private readonly bool backgroundPreview;
 
     private readonly MonitorSelector monitor = new();
+    private Form? monitorPanel;
+    private readonly System.Windows.Forms.Timer monitorSlide = new() { Interval = 15 };
+    private readonly System.Diagnostics.Stopwatch monitorSlideClock = new();
+    private double monitorSlideProgress = 1;
     private readonly DriveSelector drive = new();
     private readonly CheckBox reverse = new() { Text = "Лента подключена справа", Margin = Padding.Empty };
     private readonly BrightnessSlider brightness = new();
@@ -184,8 +188,6 @@ internal sealed class MainWindow : Form
         screenSettings.BackColor = Field;
         screenSettings.Padding = new Padding(9, 0, 9, 0);
 
-        AddRow(screenSettings, Label("Монитор", 9, true, Muted), 24);
-        AddRow(screenSettings, monitor, 118);
         AddRow(screenSettings, reverse, 28);
         content.Paint += (_, e) =>
         {
@@ -238,6 +240,28 @@ internal sealed class MainWindow : Form
             Changed();
         };
         monitor.SelectionChanged += (_, _) => Changed();
+        preview.MonitorChoice.Click += (_, _) => ToggleMonitorPanel();
+        monitorSlide.Tick += (_, _) =>
+        {
+            monitorSlideProgress = Math.Min(1, monitorSlideClock.Elapsed.TotalMilliseconds / 280);
+            PositionMonitorPanel();
+            if (monitorSlideProgress >= 1)
+                monitorSlide.Stop();
+        };
+        LocationChanged += (_, _) => PositionMonitorPanel();
+        SizeChanged += (_, _) => PositionMonitorPanel();
+        VisibleChanged += (_, _) =>
+        {
+            if (!Visible)
+                monitorPanel?.Hide();
+        };
+        Disposed += (_, _) =>
+        {
+            monitorSlide.Dispose();
+            monitorPanel?.Dispose();
+            if (!monitor.IsDisposed)
+                monitor.Dispose();
+        };
         preview.StripPathChanged += () =>
         {
             reverse.Enabled = preview.StripPath is null;
@@ -263,6 +287,74 @@ internal sealed class MainWindow : Form
             save.Dispose();
             engine.Dispose();
         };
+    }
+
+    private void ToggleMonitorPanel()
+    {
+        if (monitorPanel is null)
+        {
+            var scale = DeviceDpi / 96f;
+            monitorPanel = new Form
+            {
+                FormBorderStyle = FormBorderStyle.None, ShowInTaskbar = false,
+                StartPosition = FormStartPosition.Manual, BackColor = Background,
+                ForeColor = WindowStyle.Text, Font = Font, Padding = new Padding((int)(10 * scale)),
+                ClientSize = new Size((int)(228 * scale), (int)(205 * scale)),
+                Opacity = backgroundPreview ? 0 : 1,
+                KeyPreview = true, AccessibleName = "Выбор монитора"
+            };
+            var panel = monitorPanel;
+            panel.Paint += (_, e) => MonitorSelector.DrawPanelSurface(e.Graphics, panel.ClientSize, panel.DeviceDpi / 96f);
+            monitor.Dock = DockStyle.Fill;
+            monitorPanel.Controls.Add(monitor);
+            monitorPanel.KeyDown += (_, e) =>
+            {
+                if (e.KeyCode == Keys.Escape)
+                    monitorPanel.Hide();
+            };
+            monitorPanel.VisibleChanged += (_, _) =>
+            {
+                if (!monitorPanel.Visible)
+                    monitorSlide.Stop();
+                preview.MonitorChoice.Primary = monitorPanel.Visible;
+                preview.MonitorChoice.Invalidate();
+            };
+        }
+
+        if (monitorPanel.Visible)
+        {
+            monitorPanel.Hide();
+            return;
+        }
+
+        monitor.RefreshDisplays(monitor.SelectedDisplay?.DeviceName);
+        monitorSlideProgress = backgroundPreview ? 1 : 0;
+        PositionMonitorPanel();
+        monitorPanel.Show(this);
+        if (!backgroundPreview)
+        {
+            monitorSlideClock.Restart();
+            monitorSlide.Start();
+        }
+    }
+
+    private void PositionMonitorPanel()
+    {
+        if (monitorPanel is null || !preview.MonitorChoice.IsHandleCreated)
+            return;
+        var work = Screen.FromControl(this).WorkingArea;
+        var client = RectangleToScreen(ClientRectangle);
+        var anchor = preview.MonitorChoice.RectangleToScreen(preview.MonitorChoice.ClientRectangle);
+        var scale = DeviceDpi / 96f;
+        var preferredHeight = (int)((31 + Math.Max(1, Screen.AllScreens.Length) * 166) * scale);
+        var panelHeight = Math.Min(preferredHeight, work.Height);
+        if (monitorPanel.Height != panelHeight)
+            monitorPanel.Height = panelHeight;
+
+        var x = Math.Clamp(client.Left + 1 - monitorPanel.Width, work.Left, Math.Max(work.Left, work.Right - monitorPanel.Width));
+        var remaining = Math.Pow(1 - monitorSlideProgress, 3);
+        monitorPanel.Location = new Point(x + (int)(28 * scale * remaining),
+            Math.Clamp(anchor.Bottom + 4, work.Top, Math.Max(work.Top, work.Bottom - monitorPanel.Height)));
     }
 
     private void BindTray()

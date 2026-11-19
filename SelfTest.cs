@@ -94,7 +94,13 @@ internal static class SelfTest
             var controls = Descendants(window).ToArray();
             var slider = controls.OfType<BrightnessSlider>().Single();
             var drive = controls.OfType<DriveSelector>().Single();
-            var monitor = controls.OfType<MonitorSelector>().Single();
+            var monitorChoice = controls.OfType<StudioButton>().Single(item => item.AccessibleName == "Выбор монитора");
+            monitorChoice.PerformClick();
+            PumpWindow();
+            var monitor = window.OwnedForms.SelectMany(Descendants).OfType<MonitorSelector>().Single();
+            Check(monitor.Visible, "Мониторы доступны при выключенной подсветке");
+            CaptureWindow(monitor.FindForm()!, folder, "monitor-panel.png");
+            monitorChoice.PerformClick();
             var preview = controls.OfType<LedPreview>().Single();
             var palette = controls.OfType<TableLayoutPanel>().Single(item => item.Name == "ColorPalette");
             var displayChoices = Descendants(monitor).OfType<CheckBox>().ToArray();
@@ -159,6 +165,8 @@ internal static class SelfTest
             drive.AccessibilityObject.Value = "Цвета экрана";
             slider.AccessibilityObject.Value = "64";
             PumpWindow();
+            monitorChoice.PerformClick();
+            PumpWindow();
             Check(monitor.Visible && slider.Value == 64 && displayChoices.Length == Screen.AllScreens.Length,
                 "Схема показывает все подключённые дисплеи");
             if (displayChoices.Length > 1)
@@ -169,6 +177,7 @@ internal static class SelfTest
                 Check(nextDisplay.Checked && displayChoices.Count(item => item.Checked) == 1,
                     "Щелчок выбирает один монитор");
             }
+            monitorChoice.PerformClick();
             window.Size = window.MinimumSize;
             PumpWindow();
             CheckLayout(controls);
@@ -246,7 +255,7 @@ internal static class SelfTest
         }
     }
 
-    private static void CaptureWindow(MainWindow window, string directory, string filename)
+    private static void CaptureWindow(Form window, string directory, string filename)
     {
         using var bitmap = new Bitmap(window.Width, window.Height);
         window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
