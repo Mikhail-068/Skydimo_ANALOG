@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Kontur;
 
-internal enum LightMode { Solid, Screen, Music, Magic, Chase }
+internal enum LightMode { Solid, Screen, Music, Magic, Chase, Hazard }
 
 internal readonly record struct Rgb(byte Red, byte Green, byte Blue)
 {
@@ -21,6 +21,14 @@ internal static class Sk0127
     public static readonly Point[] Cells = Enumerable.Range(0, Rows).Reverse().Select(y => new Point(0, y))
         .Concat(Enumerable.Range(0, Columns).Select(x => new Point(x, 0)))
         .Concat(Enumerable.Range(0, Rows).Select(y => new Point(Columns - 1, y))).ToArray();
+
+    internal static Rgb[] SideFrame(Rgb left, Rgb right)
+    {
+        var frame = new Rgb[Count];
+        Array.Fill(frame, left, 0, Rows);
+        Array.Fill(frame, right, Rows + Columns, Rows);
+        return frame;
+    }
 
     public static bool Identified(ReadOnlySpan<byte> reply)
     {

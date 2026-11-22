@@ -28,6 +28,7 @@ internal static class SelfTest
                 !SerialLink.IsPort(@"COM1\test"), "Валидация порта");
 
             TestPortSelection();
+            TestHazardFrame();
             var folder = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(result))!, "config");
             var files = new LocalFiles(folder);
             var settings = new LightSettings { Brightness = 26, Reverse = true, Mode = LightMode.Screen };
@@ -44,6 +45,38 @@ internal static class SelfTest
             File.WriteAllText(result, error.ToString());
             return 1;
         }
+    }
+
+    private static void TestHazardFrame()
+    {
+        var settings = new LightSettings { Brightness = 46 };
+        var amber = Sk0127.Correct(new Rgb(255, 177, 52), settings.Brightness);
+        var lit = LightingEngine.HazardFrame(settings, .80).AsSpan();
+        Check(lit[..Sk0127.Rows].IndexOfAnyExcept(amber) < 0 &&
+            lit.Slice(Sk0127.Rows, Sk0127.Columns).IndexOfAnyExcept(default(Rgb)) < 0 &&
+            lit[^Sk0127.Rows..].IndexOfAnyExcept(amber) < 0, "Аварийка зажигает обе боковины, верх остаётся тёмным");
+        byte RedAt(double seconds) => LightingEngine.HazardFrame(settings, seconds)[0].Red;
+        Check(RedAt(0) == 0 && RedAt(.18) > 0 && RedAt(.44) > RedAt(.18) &&
+            RedAt(.44) < amber.Red && RedAt(.80) == amber.Red,
+            "Аварийка плавно загорается и держит пик");
+        Check(RedAt(1.16) < amber.Red && RedAt(1.46) > RedAt(1.76) &&
+            RedAt(1.76) > RedAt(2.08) && RedAt(2.08) > 0 &&
+            LightingEngine.HazardFrame(settings, 2.45).AsSpan().IndexOfAnyExcept(default(Rgb)) < 0 &&
+            LightingEngine.HazardFrame(settings, 3.56).AsSpan().SequenceEqual(lit),
+            "Обе боковины плавно гаснут вместе, пауза и цикл повторяются");
+        var path = Enumerable.Repeat(new PointF(.5f, .9f), Sk0127.Count).ToArray();
+        path[0] = new PointF(.93f, .27f);
+        path[^1] = new PointF(.07f, .73f);
+        var custom = LightingEngine.HazardFrame(settings with { StripPath = path }, .80);
+        Check(custom[0] == amber && custom[^1] == amber &&
+            custom.AsSpan(1, custom.Length - 2).IndexOfAnyExcept(default(Rgb)) < 0,
+            "Аварийка использует боковые светодиоды нарисованного маршрута");
+        Check(LedPreview.AlignedHazardFrame(custom, path).AsSpan().SequenceEqual(lit),
+            "Ореолы в предпросмотре выровнены при несимметричном маршруте");
+        custom[0] = default;
+        Check(LedPreview.AlignedHazardFrame(custom, path).AsSpan()
+            .SequenceEqual(Sk0127.SideFrame(default, amber)),
+            "Предпросмотр не подсвечивает отсутствующую боковину");
     }
 
     private static void TestPortSelection()
@@ -188,7 +221,8 @@ internal static class SelfTest
             }
             var files = new LocalFiles(Path.Combine(folder, "config"));
             files.Save(new LightSettings { Brightness = 51, ColorArgb = Color.FromArgb(134, 218, 227).ToArgb() });
-            using var window = new MainWindow(files, backgroundPreview: true, controllerPorts: () => ["COM7", "COM12"], startup: startup)
+            using var window = new MainWindow(files, backgroundPreview: true, controllerPorts: () => ["COM7", "COM12"],
+                startup: startup, startInHazard: true)
             {
                 ShowInTaskbar = false,
                 Opacity = 0
@@ -199,13 +233,26 @@ internal static class SelfTest
             var controls = Descendants(window).ToArray();
             var toggle = controls.OfType<StartupSwitch>().Single();
             Check(!toggle.Checked && !startup.IsEnabled(), "Автозагрузка выключена без регистрации");
+            var startupDrive = controls.OfType<DriveSelector>().Single();
+            Check(startupDrive.IsNeutral && controls.OfType<Label>().Any(item => item.Text == "Аварийка"),
+                "Запуск по команде Windows открывает приложение на N с аварийкой");
+            startupDrive.AccessibilityObject.Value = "Выключено";
+            PumpWindow(900);
             toggle.Checked = true;
             using (var run = Registry.CurrentUser.OpenSubKey(startupKey))
             {
                 Check(run?.GetValue(WindowsStartup.EntryName) is string command &&
-                    command == $"\"{Application.ExecutablePath}\"", "Автозагрузка записывает путь текущей сборки");
+                    command == $"\"{Application.ExecutablePath}\" {WindowsStartup.LaunchArgument}",
+                    "Автозагрузка записывает путь и аргумент запуска аварийки");
             }
             Check(new WindowsStartup(startupKey).IsEnabled(), "Автозагрузка сохраняется между экземплярами");
+            using (var run = Registry.CurrentUser.OpenSubKey(startupKey, writable: true)!)
+                run.SetValue(WindowsStartup.EntryName, $"\"{Application.ExecutablePath}\"");
+            startup.UpgradeLegacyCommand();
+            using (var run = Registry.CurrentUser.OpenSubKey(startupKey))
+                Check(run?.GetValue(WindowsStartup.EntryName) is string upgraded &&
+                    upgraded == $"\"{Application.ExecutablePath}\" {WindowsStartup.LaunchArgument}",
+                    "Обновление сохраняет прежнюю автозагрузку и добавляет аргумент");
             CaptureWindow(window, folder, "startup-on.png");
             toggle.Checked = false;
             Check(!startup.IsEnabled(), "Переключатель удаляет запись автозагрузки");
@@ -239,20 +286,18 @@ internal static class SelfTest
             Check(slider.FindForm() == window && preview.Contains(slider), "Регулятор яркости находится под предпросмотром");
             drive.AccessibilityObject.Value = "Один цвет";
             drive.AccessibilityObject.Value = "Выбор цвета";
-            PumpWindow(155);
             var viewport = palette.Parent!;
             var fullHeight = palette.Height;
-            var partialHeight = viewport.Height;
-            Check(partialHeight > 0 && partialHeight < fullHeight && palette.Bottom == partialHeight,
-                "Палитра плавно выезжает, сохраняя высоту");
+            Check(PumpUntil(() => viewport.Height > fullHeight * .36 && viewport.Height < fullHeight * .88, 500)
+                && palette.Bottom == viewport.Height,
+                $"Палитра плавно выезжает, сохраняя высоту: {viewport.Height} из {fullHeight}");
             drive.AccessibilityObject.Value = "Один цвет";
             Check(viewport.Visible && !portPicker.Visible && !toggle.Visible,
                 "Быстрый возврат разворачивает движение без скрытия палитры");
             var heightAtReversal = viewport.Height;
-            PumpWindow(50);
-            var retractingHeight = viewport.Height;
-            Check(retractingHeight > 0 && retractingHeight < heightAtReversal && palette.Height == fullHeight,
-                $"Палитра задвигается от текущего положения: {heightAtReversal} → {retractingHeight}");
+            Check(PumpUntil(() => viewport.Height > 0 && viewport.Height < heightAtReversal, 230)
+                && palette.Height == fullHeight,
+                $"Палитра задвигается от текущего положения: {heightAtReversal} → {viewport.Height}");
             drive.AccessibilityObject.Value = "Выбор цвета";
             Check(viewport.Height > 0 && viewport.Height < fullHeight,
                 "Повторный выезд начинается с текущего положения");
@@ -333,10 +378,36 @@ internal static class SelfTest
                 Check(files.Load().Mode == mode, "Сохранение режима " + name);
             }
             CaptureWindow(window, folder, "effects.png");
+            slider.AccessibilityObject.Value = "46";
             drive.AccessibilityObject.Value = "Нейтраль N";
             PumpWindow(850);
-            Check(drive.IsNeutral && !drive.IsOn && drive.Mode == LightMode.Chase, "Нейтраль сохраняет предыдущий режим");
-            CaptureWindow(window, folder, "neutral.png");
+            var amber = Sk0127.Correct(new Rgb(255, 177, 52), 46);
+            Check(drive.IsNeutral && drive.Mode == LightMode.Chase &&
+                files.Load() is { Mode: LightMode.Chase, Brightness: 46 } neutralSettings &&
+                neutralSettings.ColorArgb == editedShade.ToArgb(), "Нейтраль сохраняет предыдущий режим и оттенок");
+            var sawPeak = false;
+            var sawGradient = false;
+            var sawPause = false;
+            for (var i = 0; i < 64 && (!sawPeak || !sawGradient || !sawPause); i++)
+            {
+                PumpWindow(50);
+                var frame = preview.Frame;
+                if (frame.IndexOfAnyExcept(default(Rgb)) < 0)
+                    sawPause = true;
+                else
+                {
+                    Check(frame[0] == frame[^1] && frame[0].Red <= amber.Red &&
+                        frame[Sk0127.Rows] == default, "На N яркость меняется одновременно на обеих боковинах");
+                    sawGradient |= frame[0].Red > 0 && frame[0].Red < amber.Red;
+                    if (frame[0] == amber && !sawPeak)
+                    {
+                        CaptureWindow(window, folder, "neutral.png");
+                        sawPeak = true;
+                    }
+                }
+            }
+            Check(sawPeak && sawGradient && sawPause && controls.OfType<Label>().Any(item => item.Text == "Аварийка"),
+                "Аварийка в предпросмотре проходит пик, промежуточную яркость и паузу");
 
             drive.AccessibilityObject.Value = "Цвета экрана";
             slider.AccessibilityObject.Value = "64";
@@ -373,7 +444,8 @@ internal static class SelfTest
 
             drive.AccessibilityObject.Value = "Выключено";
             PumpWindow(1000);
-            Check(!drive.IsOn && drive.Mode == LightMode.Screen, "Выключение сохраняет режим");
+            Check(!drive.IsOn && drive.Mode == LightMode.Screen &&
+                preview.Frame.IndexOfAnyExcept(default(Rgb)) < 0, "Положение «Выкл» гасит свет и сохраняет режим");
             CaptureWindow(window, folder, "off.png");
             drive.AccessibilityObject.Value = "Один цвет";
             Check(drive.IsOn && drive.Mode == LightMode.Solid, "Включение однотонного режима");
@@ -454,6 +526,19 @@ internal static class SelfTest
             parent.Inflate(1, 1);
             Check(parent.Contains(control.Bounds), $"Элемент выходит за границы окна: {control.GetType().Name} {control.Text} {control.Bounds}, контейнер {parent}");
         }
+    }
+
+    private static bool PumpUntil(Func<bool> condition, int timeout)
+    {
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        do
+        {
+            Application.DoEvents();
+            if (condition())
+                return true;
+            Thread.Sleep(10);
+        } while (elapsed.ElapsedMilliseconds < timeout);
+        return false;
     }
 
     private static void PumpWindow(int duration = 240)

@@ -43,6 +43,7 @@ internal sealed class LedPreview : Control
     private int[]? wallIndices;
     private Rgb[] routePixels = new Rgb[Sk0127.Count];
     private bool reverseStrip;
+    private bool hazardPreview;
 
     public event Action? StripPathChanged;
 
@@ -62,7 +63,7 @@ internal sealed class LedPreview : Control
                     var y = value[index].Y * (Sk0127.Rows - 1) - cell.Y;
                     return x * x + y * y;
                 })).ToArray();
-            SetFrame(routePixels);
+            SetFrame(routePixels, hazardPreview);
             Invalidate();
         }
     }
@@ -145,10 +146,15 @@ internal sealed class LedPreview : Control
         };
     }
 
-    public void SetFrame(Rgb[] value)
+    internal ReadOnlySpan<Rgb> Frame => routePixels;
+
+    public void SetFrame(Rgb[] value, bool hazard)
     {
         routePixels = value;
-        if (wallIndices is not null)
+        hazardPreview = hazard;
+        if (hazard && stripPath is not null)
+            value = AlignedHazardFrame(value, stripPath);
+        else if (wallIndices is not null)
             value = wallIndices.Select(index => routePixels[index]).ToArray();
         if (value.AsSpan().SequenceEqual(pixels))
             return;
@@ -168,6 +174,23 @@ internal sealed class LedPreview : Control
                 Mix(left.G, top.G, right.G), Mix(left.B, top.B, right.B)));
         }
         Invalidate();
+    }
+
+    internal static Rgb[] AlignedHazardFrame(Rgb[] frame, PointF[] path)
+    {
+        // Rear-view X is mirrored. Use each emitting side's color along the front-view edge.
+        Rgb left = default, right = default;
+        for (var i = 0; i < frame.Length; i++)
+        {
+            if (path[i].X > .5f)
+            {
+                if (frame[i].Red > left.Red)
+                    left = frame[i];
+            }
+            else if (frame[i].Red > right.Red)
+                right = frame[i];
+        }
+        return Sk0127.SideFrame(left, right);
     }
 
     public override Rectangle DisplayRectangle
@@ -528,7 +551,8 @@ internal sealed class LedPreview : Control
         var height = width * 9 / 16;
         var monitor = new RectangleF(stage.Left + (stage.Width - width) / 2,
             stage.Top + (stage.Height - height) / 2 - 6 * scale, width, height);
-        var rail = RectangleF.FromLTRB(monitor.Left - 12 * scale, monitor.Top - 12 * scale,
+        var railTop = hazardPreview ? monitor.Top : monitor.Top - 12 * scale;
+        var rail = RectangleF.FromLTRB(monitor.Left - 12 * scale, railTop,
             monitor.Right + 12 * scale, monitor.Bottom);
         ambient.Draw(g, stage, rail, pixels);
         var apparentWidth = monitor.Width * Math.Max(.045f, (float)Math.Abs(Math.Cos(rotation * Math.PI)));

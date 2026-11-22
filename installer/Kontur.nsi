@@ -59,6 +59,10 @@ Section "Контур"
         Abort
     ${EndIf}
 
+    ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "KonturSK0127"
+    StrCmp $0 '$\"$INSTDIR\Kontur.exe$\"' 0 +2
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "KonturSK0127" '$\"$INSTDIR\Kontur.exe$\" --startup'
+
     SetOutPath "$INSTDIR\licenses"
     File "${LICENSE_DIR}\dotnet-runtime-license.txt"
     File "${LICENSE_DIR}\dotnet-desktop-license.txt"
@@ -92,8 +96,10 @@ Section "Uninstall"
     RMDir "$INSTDIR\licenses"
     Delete "$SMPROGRAMS\Контур.lnk"
     ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "KonturSK0127"
-    StrCmp $0 '$\"$INSTDIR\Kontur.exe$\"' 0 +2
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "KonturSK0127"
+    ${If} $0 == '$\"$INSTDIR\Kontur.exe$\"'
+    ${OrIf} $0 == '$\"$INSTDIR\Kontur.exe$\" --startup'
+        DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "KonturSK0127"
+    ${EndIf}
     DeleteRegKey HKCU "${ARP_KEY}"
     Delete "$INSTDIR\Uninstall.exe"
     RMDir "$INSTDIR"

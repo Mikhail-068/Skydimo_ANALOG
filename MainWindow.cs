@@ -59,7 +59,7 @@ internal sealed class MainWindow : Form
     private string? preferredPort;
 
     public MainWindow(LocalFiles files, bool backgroundPreview = false, Func<string[]>? controllerPorts = null,
-        WindowsStartup? startup = null)
+        WindowsStartup? startup = null, bool startInHazard = false)
     {
         this.files = files;
         this.backgroundPreview = backgroundPreview;
@@ -84,6 +84,8 @@ internal sealed class MainWindow : Form
         RefreshPortChoices();
         brightness.Value = settings.Brightness;
         drive.Mode = settings.Mode;
+        if (startInHazard)
+            drive.Position = DriveSelector.NeutralPosition;
         reverse.Checked = settings.Reverse;
         preview.ReverseStrip = reverse.Checked;
         preview.StripPath = settings.StripPath is { Length: Sk0127.Count } path ? path : null;
@@ -447,7 +449,11 @@ internal sealed class MainWindow : Form
 
     private void ReadStartup()
     {
-        try { startupSwitch.Checked = startup.IsEnabled(); }
+        try
+        {
+            startup.UpgradeLegacyCommand();
+            startupSwitch.Checked = startup.IsEnabled();
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
             files.Log("Не удалось прочитать параметры автозагрузки. " + ex.Message);
@@ -490,11 +496,11 @@ internal sealed class MainWindow : Form
             portPicker.ResetOptions(choices, preferredPort);
     }
 
-    private LightingInput Current()
+    private LightSettings UserSettings()
     {
         var selected = monitor.SelectedDisplay;
 
-        return new LightingInput(new LightSettings
+        return new LightSettings
         {
             PreferredPort = preferredPort,
             Monitor = monitor.PreferredDisplay ?? selected?.DeviceName ?? "",
@@ -505,7 +511,19 @@ internal sealed class MainWindow : Form
             Mode = drive.Mode,
             StripPath = preview.StripPath,
             Reverse = reverse.Checked
-        }, selected?.Bounds ?? Rectangle.Empty, drive.IsOn, drive.IsOn && !backgroundPreview ? preferredPort ?? SerialLink.Automatic : null);
+        };
+    }
+
+    private LightingInput Current()
+    {
+        var neutral = drive.IsNeutral;
+        var selected = monitor.SelectedDisplay;
+        var on = drive.IsOn || neutral;
+        var settings = UserSettings();
+        if (neutral)
+            settings = settings with { Mode = LightMode.Hazard };
+        return new LightingInput(settings, selected?.Bounds ?? Rectangle.Empty, on,
+            on && !backgroundPreview ? preferredPort ?? SerialLink.Automatic : null);
     }
 
     private void SetPaletteOpen(bool open)
@@ -573,7 +591,7 @@ internal sealed class MainWindow : Form
             LightMode.Magic => "Цветовая волна",
             LightMode.Chase => "Бегущие огни",
             _ => "Включена"
-        } : drive.IsNeutral ? "Нейтраль" : "Выключена";
+        } : drive.IsNeutral ? "Аварийка" : "Выключена";
 
     }
 
@@ -581,14 +599,15 @@ internal sealed class MainWindow : Form
     {
         if (++displayRefresh % 10 == 0)
             monitor.RefreshDisplays();
-        preview.SetFrame(engine.Preview);
+        var neutral = drive.IsNeutral;
+        preview.SetFrame(engine.Preview, neutral);
         var link = engine.Status;
         var screenMode = drive.Mode == LightMode.Screen;
-        var modeStatus = !drive.IsOn ? "Выключено" : !link.Connected ? "Поиск контроллера" : "Подключено";
-        badge.UpdateStatus(modeStatus, link.Connected, drive.IsOn && drive.Mode == LightMode.Solid);
+        var modeStatus = !drive.IsOn && !neutral ? "Выключено" : !link.Connected ? "Поиск контроллера" : "Подключено";
+        badge.UpdateStatus(modeStatus, link.Connected, (drive.IsOn || neutral) && (drive.Mode == LightMode.Solid || neutral));
         screenLamp.UpdateStatus(modeStatus, link.Connected, drive.IsOn && screenMode);
-        var connection = drive.IsOn ? link.Message : "";
-        var captureError = drive.Mode switch
+        var connection = drive.IsOn || neutral ? link.Message : "";
+        var captureError = (neutral ? LightMode.Hazard : drive.Mode) switch
         {
             LightMode.Screen => engine.CaptureError,
             LightMode.Music => engine.AudioError,
@@ -706,7 +725,7 @@ internal sealed class MainWindow : Form
     private void SaveSettings()
     {
         save.Stop();
-        try { files.Save(Current().Settings); }
+        try { files.Save(UserSettings()); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             files.Log("Не удалось сохранить настройки. " + ex.Message);

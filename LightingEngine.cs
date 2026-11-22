@@ -154,13 +154,19 @@ internal sealed class LightingEngine : IDisposable
         var stripFade = new PowerFade();
         var colors = Dark;
         var reverse = false;
+        long? hazardStart = null;
 
         bool UpdateFrame(LightingInput current)
         {
+            if (!current.IsOn || current.Settings.Mode != LightMode.Hazard)
+                hazardStart = null;
             if (!current.IsOn)
                 return false;
 
-            var next = Colors(current, Volatile.Read(ref screenFrame), clock.Elapsed.TotalSeconds, Volatile.Read(ref music));
+            var now = clock.ElapsedMilliseconds;
+            var next = current.Settings.Mode == LightMode.Hazard
+                ? HazardFrame(current.Settings, (now - (hazardStart ??= now)) / 1000d)
+                : Colors(current, Volatile.Read(ref screenFrame), clock.Elapsed.TotalSeconds, Volatile.Read(ref music));
             if (next is null)
                 return false;
 
@@ -315,6 +321,43 @@ internal sealed class LightingEngine : IDisposable
         return Enumerable.Repeat(solid, Sk0127.Count).ToArray();
     }
 
+    internal static Rgb[] HazardFrame(LightSettings settings, double seconds)
+    {
+        const double rise = .65;
+        const double holdEnd = rise + .32;
+        const double fadeEnd = holdEnd + 1.35;
+        const double cycle = fadeEnd + .44;
+
+        var phase = seconds % cycle;
+        // Both sides share one clock. Keep sending black during the pause.
+        if (phase <= 0 || phase >= fadeEnd)
+            return Dark;
+
+        var fading = phase > holdEnd;
+        var progress = fading
+            ? (fadeEnd - phase) / (fadeEnd - holdEnd)
+            : Math.Min(1, phase / rise);
+        var level = progress * progress * (3 - 2 * progress);
+        var peak = Sk0127.Correct(new Rgb(255, 177, 52), settings.Brightness);
+        // Preserve dim steps during the fade instead of compressing them with full gamma.
+        var amber = ScaleRgb(peak, Math.Pow(level, fading ? 1.25 : 2.2));
+        if (amber == default)
+            return Dark;
+        if (settings.StripPath is not { Length: Sk0127.Count } path)
+            return Sk0127.SideFrame(amber, amber);
+
+        var frame = new Rgb[Sk0127.Count];
+        var aspect = (Sk0127.Columns - 1d) / (Sk0127.Rows - 1);
+        for (var i = 0; i < frame.Length; i++)
+        {
+            var (x, y) = (path[i].X, path[i].Y);
+            var horizontalDistance = Math.Min(x, 1 - x) * aspect;
+            if (horizontalDistance < Math.Min(y, 1 - y))
+                frame[i] = amber;
+        }
+        return frame;
+    }
+
     internal static Rgb MusicPixel(AudioBands bands, double position, int brightness)
     {
         double Weight(double center) => 1 - .82 * Math.Abs(position - center);
@@ -357,8 +400,13 @@ internal sealed class LightingEngine : IDisposable
 
         // Match the gamma correction used for the brightness slider.
         var multiplier = Math.Pow(level, 2.2);
+        return colors.Select(color => ScaleRgb(color, multiplier)).ToArray();
+    }
+
+    private static Rgb ScaleRgb(Rgb color, double multiplier)
+    {
         byte Channel(byte value) => (byte)Math.Round(value * multiplier);
-        return colors.Select(color => new Rgb(Channel(color.Red), Channel(color.Green), Channel(color.Blue))).ToArray();
+        return new Rgb(Channel(color.Red), Channel(color.Green), Channel(color.Blue));
     }
 
     private sealed class PowerFade

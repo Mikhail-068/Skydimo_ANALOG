@@ -438,7 +438,8 @@ internal sealed class DriveSelector : DashboardInput
     }
 
     public event EventHandler? ValueChanged;
-    public bool IsNeutral => position == 7;
+    internal const int NeutralPosition = 7;
+    public bool IsNeutral => position == NeutralPosition;
     public bool IsOn => position != 0 && !IsNeutral;
     public bool ChoosingColor => position == 3;
     public bool IsMoving => motionClock.IsRunning;
@@ -725,7 +726,7 @@ internal sealed class DriveSelector : DashboardInput
             case Keys.Left: Position = 1; break;
             case Keys.Right: Position = 2; break;
             case Keys.Down: Position = position switch { 1 or 3 => 4, 2 => 6, 4 => 5, 5 => 6, 6 => 4, 7 => 5, _ => 7 }; break;
-            case Keys.N: Position = 7; break;
+            case Keys.N: Position = NeutralPosition; break;
             default: return;
         }
         e.Handled = true;
@@ -761,7 +762,7 @@ internal sealed class DriveSelector : DashboardInput
                 else if (value == "Музыка") owner.Position = 4;
                 else if (value == "Волшебный") owner.Position = 5;
                 else if (value == "Бегущие огни") owner.Position = 6;
-                else if (value == "Нейтраль N") owner.Position = 7;
+                else if (value == "Нейтраль N") owner.Position = NeutralPosition;
             }
         }
     }

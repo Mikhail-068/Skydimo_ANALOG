@@ -25,7 +25,7 @@ internal static class Program
             ? Path.GetFullPath(args[1])
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KonturSK0127");
         var files = new LocalFiles(dataFolder);
-        using var window = new MainWindow(files);
+        using var window = new MainWindow(files, startInHazard: args is [WindowsStartup.LaunchArgument]);
         Application.Run(window);
         return 0;
     }
