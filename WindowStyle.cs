@@ -769,21 +769,39 @@ internal sealed class DriveSelector : DashboardInput
 
 internal sealed class BrightnessSlider : Control
 {
+    private readonly System.Windows.Forms.Timer slide = new() { Interval = 15 };
+    private readonly System.Diagnostics.Stopwatch slideClock = new();
+    private double slideFrom;
     private int value;
+    internal double DisplayedValue { get; private set; }
     public event EventHandler? ValueChanged;
     public int Value
     {
         get => value;
-        set
+        set => SetValue(value, animate: true);
+    }
+
+    private void SetValue(int level, bool animate)
+    {
+        var next = Math.Clamp(level, 0, 100);
+        if (!animate || !IsHandleCreated || !Visible || !SystemInformation.UIEffectsEnabled)
         {
-            var next = Math.Clamp(value, 0, 100);
-            if (this.value == next)
-                return;
-            this.value = next;
+            slide.Stop();
+            DisplayedValue = next;
             Invalidate();
-            AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
-            ValueChanged?.Invoke(this, EventArgs.Empty);
         }
+        else if (next != value)
+        {
+            slideFrom = DisplayedValue;
+            slideClock.Restart();
+            slide.Start();
+        }
+
+        if (value == next)
+            return;
+        value = next;
+        AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
+        ValueChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public BrightnessSlider()
@@ -793,6 +811,22 @@ internal sealed class BrightnessSlider : Control
         Margin = Padding.Empty;
         AccessibleName = "Яркость";
         AccessibleRole = AccessibleRole.Slider;
+        slide.Tick += (_, _) =>
+        {
+            var progress = Math.Min(1, slideClock.Elapsed.TotalMilliseconds / 160);
+            var eased = 1 - Math.Pow(1 - progress, 3);
+            DisplayedValue = slideFrom + (value - slideFrom) * eased;
+            if (progress >= 1)
+                slide.Stop();
+            Invalidate();
+        };
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            slide.Dispose();
+        base.Dispose(disposing);
     }
 
     private float Inset => 19 * DeviceDpi / 96f;
@@ -803,22 +837,67 @@ internal sealed class BrightnessSlider : Control
     {
         var g = e.Graphics;
         g.Clear(Parent?.BackColor ?? WindowStyle.Panel);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
         var scale = DeviceDpi / 96f;
         var width = Math.Max(1, Width - Inset * 2);
         var y = Height / 2f;
-        var x = Inset + width * Value / 100;
-        var track = new RectangleF(Inset, y - 2 * scale, width, 4 * scale);
-        WindowStyle.Satin(g, track, 2 * scale, Color.FromArgb(70, 80, 92), Color.FromArgb(40, 52, 66),
-            Color.FromArgb(34, 46, 58), Color.FromArgb(30, 42, 54));
-        if (x - Inset > 1)
-            WindowStyle.Satin(g, new RectangleF(Inset, track.Y, x - Inset, track.Height), 2 * scale,
-                Color.FromArgb(255, 201, 120), Color.FromArgb(255, 178, 92),
-                Color.FromArgb(255, 201, 120), Color.FromArgb(190, 140, 60));
+        var x = Inset + width * (float)DisplayedValue / 100;
 
-        var thumb = new RectangleF(x - 6 * scale, y - 6 * scale, 12 * scale, 12 * scale);
-        WindowStyle.Satin(g, thumb, 6 * scale, WindowStyle.Silver, WindowStyle.Background,
-            Focused && ShowFocusCues ? WindowStyle.Accent : WindowStyle.Panel,
-            Focused && ShowFocusCues ? Color.FromArgb(190, 140, 60) : Color.FromArgb(24, 32, 42));
+        var recess = new RectangleF(Inset - 3 * scale, y - 4 * scale, width + 6 * scale, 8 * scale);
+        WindowStyle.Satin(g, recess, 4 * scale, Color.FromArgb(18, 24, 32), Color.FromArgb(35, 45, 57),
+            Color.FromArgb(25, 33, 43));
+
+        var track = new RectangleF(Inset, y - 1.5f * scale, width, 3 * scale);
+        using (var trackPath = WindowStyle.RoundedPath(track, 1.5f * scale))
+        using (var trackBrush = new LinearGradientBrush(track, Color.FromArgb(69, 81, 94), Color.FromArgb(43, 53, 66), 90f))
+            g.FillPath(trackBrush, trackPath);
+
+        var litWidth = x - Inset;
+        if (litWidth > .5f)
+        {
+            DrawWarmTrack(g, new RectangleF(Inset, y - 7 * scale, litWidth, 14 * scale), scale,
+                Color.FromArgb(18, 246, 160, 66));
+            DrawWarmTrack(g, new RectangleF(Inset, y - 4.5f * scale, litWidth, 9 * scale), scale,
+                Color.FromArgb(33, 251, 174, 84));
+            DrawWarmTrack(g, new RectangleF(Inset, y - 2.5f * scale, litWidth, 5 * scale), scale,
+                Color.FromArgb(42, 254, 185, 103));
+            DrawWarmTrack(g, new RectangleF(Inset, y - 1.5f * scale, litWidth, 3 * scale), scale,
+                Color.FromArgb(224, 255, 194, 116));
+
+            using var glowPath = new GraphicsPath();
+            glowPath.AddEllipse(x - 12 * scale, y - 11 * scale, 24 * scale, 22 * scale);
+            using var glow = new PathGradientBrush(glowPath)
+            {
+                CenterColor = Color.FromArgb((int)Math.Min(63, litWidth / scale * 5), 252, 171, 78),
+                SurroundColors = [Color.FromArgb(0, 252, 171, 78)]
+            };
+            g.FillPath(glow, glowPath);
+        }
+
+        var thumb = new RectangleF(x - 5.5f * scale, y - 5.5f * scale, 11 * scale, 11 * scale);
+        using var metal = new LinearGradientBrush(thumb, Color.FromArgb(220, 226, 228), Color.FromArgb(79, 93, 105), 90f);
+        g.FillEllipse(metal, thumb);
+        var focused = Focused && ShowFocusCues;
+        using var rim = new Pen(focused ? WindowStyle.Accent : Color.FromArgb(71, 85, 98), scale);
+        g.DrawEllipse(rim, focused ? RectangleF.Inflate(thumb, scale, scale) : thumb);
+    }
+
+    private static void DrawWarmTrack(Graphics g, RectangleF bounds, float scale, Color color)
+    {
+        var fade = Math.Min(.32f, 12 * scale / bounds.Width);
+        var strength = Math.Min(1, bounds.Width / (8 * scale));
+        var clear = Color.FromArgb(0, color);
+        using var outline = WindowStyle.RoundedPath(bounds, bounds.Height / 2);
+        using var brush = new LinearGradientBrush(bounds, clear, clear, 0f)
+        {
+            InterpolationColors = new ColorBlend
+            {
+                Colors = [clear, Color.FromArgb((int)(color.A * strength * .62f), color),
+                    Color.FromArgb((int)(color.A * strength), color), clear],
+                Positions = [0, fade, 1 - fade, 1]
+            }
+        };
+        g.FillPath(brush, outline);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
@@ -828,14 +907,14 @@ internal sealed class BrightnessSlider : Control
             return;
         Focus();
         Capture = true;
-        ApplyPosition(e.X);
+        ApplyPosition(e.X, animate: true);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
         if (Capture && e.Button == MouseButtons.Left)
-            ApplyPosition(e.X);
+            ApplyPosition(e.X, animate: false);
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -870,8 +949,8 @@ internal sealed class BrightnessSlider : Control
     protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
     protected override AccessibleObject CreateAccessibilityInstance() => new SliderAccessibility(this);
 
-    private void ApplyPosition(int x) =>
-        Value = (int)Math.Round(100 * (x - Inset) / Math.Max(1, Width - Inset * 2));
+    private void ApplyPosition(int x, bool animate) =>
+        SetValue((int)Math.Round(100 * (x - Inset) / Math.Max(1, Width - Inset * 2)), animate);
 
     private sealed class SliderAccessibility(BrightnessSlider slider) : ControlAccessibleObject(slider)
     {

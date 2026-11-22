@@ -239,7 +239,7 @@ internal static class SelfTest
             Check(slider.FindForm() == window && preview.Contains(slider), "Регулятор яркости находится под предпросмотром");
             drive.AccessibilityObject.Value = "Один цвет";
             drive.AccessibilityObject.Value = "Выбор цвета";
-            PumpWindow(100);
+            PumpWindow(155);
             var viewport = palette.Parent!;
             var fullHeight = palette.Height;
             var partialHeight = viewport.Height;
@@ -248,10 +248,11 @@ internal static class SelfTest
             drive.AccessibilityObject.Value = "Один цвет";
             Check(viewport.Visible && !portPicker.Visible && !toggle.Visible,
                 "Быстрый возврат разворачивает движение без скрытия палитры");
-            PumpWindow(40);
+            var heightAtReversal = viewport.Height;
+            PumpWindow(50);
             var retractingHeight = viewport.Height;
-            Check(retractingHeight > 0 && retractingHeight < partialHeight && palette.Height == fullHeight,
-                "Палитра задвигается от текущего положения");
+            Check(retractingHeight > 0 && retractingHeight < heightAtReversal && palette.Height == fullHeight,
+                $"Палитра задвигается от текущего положения: {heightAtReversal} → {retractingHeight}");
             drive.AccessibilityObject.Value = "Выбор цвета";
             Check(viewport.Height > 0 && viewport.Height < fullHeight,
                 "Повторный выезд начинается с текущего положения");
@@ -310,9 +311,18 @@ internal static class SelfTest
             PumpWindow(430);
             Check(installation.Text == "Настройка положения ленты", "Возврат к виду спереди");
 
+            var beforeBrightness = slider.DisplayedValue;
             slider.AccessibilityObject.Value = "100";
+            if (SystemInformation.UIEffectsEnabled)
+            {
+                Check(slider.DisplayedValue == beforeBrightness && slider.Value == 100,
+                    "Анимация регулятора начинается с текущего положения");
+                PumpWindow(60);
+                Check(slider.DisplayedValue > beforeBrightness && slider.DisplayedValue < 100,
+                    "Бегунок проходит промежуточное положение");
+            }
             PumpWindow();
-            Check(slider.Value == 100, "Регулятор даёт полную яркость");
+            Check(slider.Value == 100 && slider.DisplayedValue == 100, "Регулятор доходит до полной яркости");
             CaptureWindow(window, folder, "solid-max.png");
             foreach (var (name, mode) in new[] { ("Музыка", LightMode.Music),
                 ("Волшебный", LightMode.Magic), ("Бегущие огни", LightMode.Chase) })
