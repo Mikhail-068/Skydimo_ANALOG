@@ -8,7 +8,19 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Kontur</AssemblyName>
     <RootNamespace>Kontur</RootNamespace>
-    <Version>0.9.1</Version>
+    <Version>0.9.2</Version>
     <ApplicationIcon>Kontur.ico</ApplicationIcon>
   </PropertyGroup>
+  <Target Name="CopyRuntimeLicenses" AfterTargets="Publish"
+          Condition="'$(SelfContained)' == 'true' and '$(RuntimeIdentifier)' == 'win-x64'">
+    <ItemGroup>
+      <_CoreRuntime Include="@(ResolvedRuntimePack)" Condition="'%(ResolvedRuntimePack.FrameworkName)' == 'Microsoft.NETCore.App'"/>
+      <_DesktopRuntime Include="@(ResolvedRuntimePack)" Condition="'%(ResolvedRuntimePack.FrameworkName)' == 'Microsoft.WindowsDesktop.App'"/>
+      <_RuntimeLicense Include="@(_CoreRuntime->'%(PackageDirectory)\LICENSE.TXT')" OutputName="dotnet-runtime-license.txt"/>
+      <_RuntimeLicense Include="@(_CoreRuntime->'%(PackageDirectory)\THIRD-PARTY-NOTICES.TXT')" OutputName="dotnet-third-party-notices.txt"/>
+      <_RuntimeLicense Include="@(_DesktopRuntime->'%(PackageDirectory)\LICENSE')" OutputName="dotnet-desktop-license.txt"/>
+    </ItemGroup>
+    <Copy SourceFiles="@(_RuntimeLicense)" DestinationFiles="@(_RuntimeLicense->'$(PublishDir)licenses\%(OutputName)')"
+          SkipUnchangedFiles="true"/>
+  </Target>
 </Project>

@@ -1,3 +1,5 @@
+using Microsoft.Win32;
+
 namespace Kontur;
 
 internal static class SelfTest
@@ -25,6 +27,7 @@ internal static class SelfTest
             Check(SerialLink.IsPort("COM12") && !SerialLink.IsPort("COM0") &&
                 !SerialLink.IsPort(@"COM1\test"), "Валидация порта");
 
+            TestPortSelection();
             var folder = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(result))!, "config");
             var files = new LocalFiles(folder);
             var settings = new LightSettings { Brightness = 26, Reverse = true, Mode = LightMode.Screen };
@@ -32,7 +35,8 @@ internal static class SelfTest
             Check(files.Load() == settings, "Сохранение и загрузка настроек");
             files.Log("Проверка записи в журнал");
             Check(File.ReadAllText(files.LogFile).Contains("Проверка записи"), "Диагностический журнал");
-            File.WriteAllText(result, "OK · кадр SK0127, выключение, раскладка, ответ контроллера, яркость, настройки и журнал");
+            TestScreenRecovery(new LocalFiles(Path.Combine(folder, "capture-recovery")));
+            File.WriteAllText(result, "OK · протокол SK0127, выбор COM-порта, потеря и восстановление экрана, яркость, настройки и журнал");
             return 0;
         }
         catch (Exception error)
@@ -40,6 +44,58 @@ internal static class SelfTest
             File.WriteAllText(result, error.ToString());
             return 1;
         }
+    }
+
+    private static void TestPortSelection()
+    {
+        Check(SerialLink.SelectControllerPort(SerialLink.Automatic, ["COM12"]) == "COM12", "Выбор единственного CH340");
+        Check(SerialLink.SelectControllerPort("com7", ["COM7", "COM12"]) == "COM7", "Ручной выбор CH340");
+        ExpectUnavailable(SerialLink.Automatic, ["COM7", "COM12"], "несколько");
+        ExpectUnavailable(SerialLink.Automatic, [], "не найден");
+        ExpectUnavailable("COM7", ["COM12"], "COM7");
+        var legacy = System.Text.Json.JsonSerializer.Deserialize<LightSettings>("""{"Port":"COM12","Brightness":32}""");
+        Check(legacy is { PreferredPort: null, Brightness: 32 }, "Старый COM-порт не превращается в ручной выбор");
+
+        static void ExpectUnavailable(string selection, string[] candidates, string message)
+        {
+            try { SerialLink.SelectControllerPort(selection, candidates); }
+            catch (IOException ex)
+            {
+                Check(ex.Message.Contains(message, StringComparison.Ordinal), "Понятная причина отказа COM-подключения");
+                return;
+            }
+            throw new InvalidOperationException("Нет подходящего COM-порта.");
+        }
+    }
+
+    private static void TestScreenRecovery(LocalFiles files)
+    {
+        var screen = new Rectangle(0, 0, 640, 480);
+        var otherScreen = new Rectangle(640, 0, 640, 480);
+        var settings = new LightSettings { ColorArgb = Color.Magenta.ToArgb(), Brightness = 100, Mode = LightMode.Screen };
+        var available = 0;
+        var input = new LightingInput(settings, screen, true, null);
+        var red = new Rgb(255, 0, 0);
+        var blue = new Rgb(0, 0, 255);
+        using var engine = new LightingEngine(input, files, (display, _) =>
+        {
+            if (Volatile.Read(ref available) == 0)
+                throw new InvalidOperationException("Monitor unavailable");
+            return Enumerable.Repeat(display == screen ? red : blue, Sk0127.Count).ToArray();
+        });
+        static bool Wait(Func<bool> condition) => SpinWait.SpinUntil(condition, TimeSpan.FromSeconds(3));
+        Check(Wait(() => engine.CaptureError is not null), "Виден сбой захвата");
+        Check(engine.Preview.All(pixel => pixel == default), "Нет однотонной засветки при старте без кадра");
+
+        Volatile.Write(ref available, 1);
+        Check(Wait(() => engine.CaptureError is null && engine.Preview[0] == red), "Восстановление захвата");
+        Volatile.Write(ref available, 0);
+        Check(Wait(() => engine.Preview[0].Red is > 0 and < 255), "Подсветка гаснет плавно при потере кадра");
+        Check(Wait(() => engine.CaptureError is not null && engine.Preview.All(pixel => pixel == default)), "Устаревший кадр не зависает");
+        Volatile.Write(ref available, 1);
+        engine.Update(input with { Display = otherScreen });
+        Check(Wait(() => engine.CaptureError is null && engine.Preview[0] == blue), "Кадр берётся с нового монитора");
+        Check(!engine.Status.Connected, "Тест не открывает USB");
     }
 
     private static void Check(bool condition, string name)
@@ -72,12 +128,50 @@ internal static class SelfTest
         }
     }
 
+    private static void TestMusicSpectrum()
+    {
+        const int sampleRate = 48000;
+        var spectrum = new AudioSpectrum();
+        Check(spectrum.Measure(sampleRate) == AudioBands.Silence, "Нет аудиоданных при запуске");
+        Rgb Tone(int frequency)
+        {
+            for (var i = 0; i < AudioSpectrum.WindowSize; i++)
+                spectrum.Add((float)(.9 * Math.Sin(2 * Math.PI * frequency * i / sampleRate)));
+            return LightingEngine.MusicPixel(spectrum.Measure(sampleRate), .5, 47);
+        }
+
+        var bass = Tone(110);
+        var mid = Tone(800);
+        var treble = Tone(4800);
+        Check(bass.Red > 10 && bass.Green == 0 && bass.Blue == 0 &&
+            mid.Green > 10 && mid.Red == 0 && mid.Blue == 0 &&
+            treble.Blue > 10 && treble.Red == 0 && treble.Green == 0,
+            "Частоты одинаковой и высокой громкости дают разные цвета");
+        var quiet = new AudioBands(.2, .2, .2);
+        var loud = new AudioBands(.65, .2, .2);
+        var calmPixel = LightingEngine.MusicPixel(quiet.Accentuate(quiet), 0, 47);
+        var accentPixel = LightingEngine.MusicPixel(loud.Accentuate(quiet), 0, 47);
+        var heldPixel = LightingEngine.MusicPixel(loud.Accentuate(loud), 0, 47);
+        Check(accentPixel.Red >= calmPixel.Red * 5 && accentPixel.Red > heldPixel.Red,
+            "Акцент ярче тихого участка и удерживаемой ноты");
+        var mixed = LightingEngine.MusicPixel(new AudioBands(.64, .39, .18), .25, 47);
+        Check(mixed is { Red: > 20, Green: > 5, Blue: 0 }, "Смешанный цвет сохраняет насыщенность");
+        for (var i = 0; i < AudioSpectrum.WindowSize; i++)
+            spectrum.Add(0);
+        Check(spectrum.Measure(sampleRate) == AudioBands.Silence, "В тишине подсветка гаснет");
+        Check(LightingEngine.MusicPixel(new AudioBands(1, 1, 1), .5, 0) == default,
+            "Цветомузыка учитывает яркость");
+    }
+
     public static int CheckWindow(string folder)
     {
         Directory.CreateDirectory(folder);
         var report = Path.Combine(folder, "result.txt");
+        var startupKey = @"Software\KonturSelfTest-" + Guid.NewGuid().ToString("N");
+        var startup = new WindowsStartup(startupKey);
         try
         {
+            TestMusicSpectrum();
             Check(DriveSelector.AlongGate(PointF.Empty, new PointF(1, 1), .25f) == new PointF(0, .5f),
                 "Рычаг выходит из верхнего положения по вертикальному пазу");
             Check(DriveSelector.AlongGate(new PointF(-1, 1), new PointF(1, 1), .5f) == new PointF(0, 1),
@@ -85,13 +179,50 @@ internal static class SelfTest
             Check(DriveSelector.AlongGate(new PointF(.5f, 1), PointF.Empty, .5f) == new PointF(0, .75f),
                 "При смене цели рычаг продолжает движение из текущей точки");
             TestAmbientWall();
+            if (Screen.AllScreens.Length > 0)
+            {
+                using var disconnected = new MonitorSelector();
+                disconnected.RestoreDisplay("kontur-test-disconnected-display");
+                Check(disconnected.SelectedDisplay is null && disconnected.PreferredDisplay == "kontur-test-disconnected-display",
+                    "Отключённый монитор сохраняется до появления, основной экран не подставляется");
+            }
             var files = new LocalFiles(Path.Combine(folder, "config"));
             files.Save(new LightSettings { Brightness = 51, ColorArgb = Color.FromArgb(134, 218, 227).ToArgb() });
-            using var window = new MainWindow(files, backgroundPreview: true) { ShowInTaskbar = false, Opacity = 0 };
+            using var window = new MainWindow(files, backgroundPreview: true, controllerPorts: () => ["COM7", "COM12"], startup: startup)
+            {
+                ShowInTaskbar = false,
+                Opacity = 0
+            };
             window.Show();
             PumpWindow(1350);
 
             var controls = Descendants(window).ToArray();
+            var toggle = controls.OfType<StartupSwitch>().Single();
+            Check(!toggle.Checked && !startup.IsEnabled(), "Автозагрузка выключена без регистрации");
+            toggle.Checked = true;
+            using (var run = Registry.CurrentUser.OpenSubKey(startupKey))
+            {
+                Check(run?.GetValue(WindowsStartup.EntryName) is string command &&
+                    command == $"\"{Application.ExecutablePath}\"", "Автозагрузка записывает путь текущей сборки");
+            }
+            Check(new WindowsStartup(startupKey).IsEnabled(), "Автозагрузка сохраняется между экземплярами");
+            CaptureWindow(window, folder, "startup-on.png");
+            toggle.Checked = false;
+            Check(!startup.IsEnabled(), "Переключатель удаляет запись автозагрузки");
+            var portPicker = controls.OfType<ControllerPicker>().Single();
+            Check(portPicker.Selection?.Caption == "Авто" && portPicker.Options.Count == 3,
+                "Перечень USB-контроллеров начинается с режима «Авто»");
+            Check(portPicker.Visible && portPicker.Width >= 160 && portPicker.Height >= 43, $"Поле USB-контроллера должно быть видно. Размер {portPicker.Bounds}.");
+            portPicker.PerformClick();
+            PumpWindow();
+            Check(portPicker.IsOpen, "Список доступных COM-портов открывается");
+            portPicker.Choose(portPicker.Options[2]);
+            Check(!portPicker.IsOpen, "Список закрывается после выбора");
+            PumpWindow(450);
+            Check(files.Load().PreferredPort == "COM12", "Выбранный COM-порт сохраняется");
+            portPicker.Choose(portPicker.Options[0]);
+            PumpWindow(450);
+            Check(files.Load().PreferredPort is null, "Возврат в режим «Авто» сохраняется");
             var slider = controls.OfType<BrightnessSlider>().Single();
             var drive = controls.OfType<DriveSelector>().Single();
             var monitorChoice = controls.OfType<StudioButton>().Single(item => item.AccessibleName == "Выбор монитора");
@@ -111,6 +242,7 @@ internal static class SelfTest
             PumpWindow();
             Check(drive.ChoosingColor && drive.IsOn && palette.Visible &&
                 palette.Controls.OfType<StudioButton>().Any(item => item.Text == "Другой цвет…"), "Палитра на левой ветке");
+            CheckPaletteLayout(palette, drive, portPicker, toggle);
             palette.Controls.OfType<StudioButton>().Single(item => item.Text == "Синий").PerformClick();
             PumpWindow(450);
             Check(files.Load().ColorArgb == Color.FromArgb(97, 157, 255).ToArgb() && palette.Visible,
@@ -136,6 +268,8 @@ internal static class SelfTest
             drive.AccessibilityObject.Value = "Один цвет";
             PumpWindow();
             Check(!palette.Visible && files.Load().ColorArgb == editedShade.ToArgb(), "Выход сохраняет оттенок");
+            Check(portPicker.Visible && portPicker.CanSelect && toggle.Visible && toggle.CanSelect,
+                "После закрытия палитры USB-контроллер и автозагрузка снова доступны");
             Check(!monitor.Visible && preview.Visible, "Настройки режима «Один цвет»");
             CheckLayout(controls);
             CaptureWindow(window, folder, "solid.png");
@@ -161,6 +295,19 @@ internal static class SelfTest
             PumpWindow();
             Check(slider.Value == 100, "Регулятор даёт полную яркость");
             CaptureWindow(window, folder, "solid-max.png");
+            foreach (var (name, mode) in new[] { ("Музыка", LightMode.Music),
+                ("Волшебный", LightMode.Magic), ("Бегущие огни", LightMode.Chase) })
+            {
+                drive.AccessibilityObject.Value = name;
+                PumpWindow(450);
+                Check(drive.IsOn && drive.Mode == mode && drive.AccessibilityObject.Value == name, name);
+                Check(files.Load().Mode == mode, "Сохранение режима " + name);
+            }
+            CaptureWindow(window, folder, "effects.png");
+            drive.AccessibilityObject.Value = "Нейтраль N";
+            PumpWindow(850);
+            Check(drive.IsNeutral && !drive.IsOn && drive.Mode == LightMode.Chase, "Нейтраль сохраняет предыдущий режим");
+            CaptureWindow(window, folder, "neutral.png");
 
             drive.AccessibilityObject.Value = "Цвета экрана";
             slider.AccessibilityObject.Value = "64";
@@ -184,6 +331,16 @@ internal static class SelfTest
             CaptureWindow(window, folder, "screen-min.png");
             drive.AccessibilityObject.Value = "Выбор цвета";
             Check(drive.Mode == LightMode.Screen && !palette.Visible, "Правая ветка не открывает палитру");
+            drive.AccessibilityObject.Value = "Один цвет";
+            drive.AccessibilityObject.Value = "Выбор цвета";
+            PumpWindow();
+            CheckPaletteLayout(palette, drive, portPicker, toggle);
+            CheckLayout(controls);
+            CaptureWindow(window, folder, "palette-min.png");
+            drive.AccessibilityObject.Value = "Цвета экрана";
+            PumpWindow();
+            Check(!palette.Visible && portPicker.Visible && toggle.Visible,
+                "В минимальном окне настройки возвращаются после закрытия палитры");
 
             drive.AccessibilityObject.Value = "Выключено";
             PumpWindow(1000);
@@ -199,7 +356,7 @@ internal static class SelfTest
             Check(files.Load().Brightness == 64 && files.Load().Mode == LightMode.Screen
                 && files.Load().ColorArgb == editedShade.ToArgb()
                 && files.Load().Monitor == monitor.SelectedDisplay?.DeviceName, "Сохранение яркости, режима, оттенка и монитора");
-            File.WriteAllText(report, "OK · палитра, мониторы, оба режима, сохранение, яркость, выключатель, минимальный размер");
+            File.WriteAllText(report, "OK · автозагрузка, палитра, мониторы, COM-порты, режимы, настройки, яркость и минимальный размер");
             return 0;
         }
         catch (Exception error)
@@ -207,6 +364,7 @@ internal static class SelfTest
             File.WriteAllText(report, error.ToString());
             return 1;
         }
+        finally { Registry.CurrentUser.DeleteSubKey(startupKey, throwOnMissingSubKey: false); }
     }
 
     private static void TestAmbientWall()
@@ -235,8 +393,31 @@ internal static class SelfTest
     private static IEnumerable<Control> Descendants(Control root) =>
         root.Controls.Cast<Control>().SelectMany(child => Descendants(child).Prepend(child));
 
+    private static void CheckPaletteLayout(Control palette, Control drive, Control portPicker, Control startup)
+    {
+        var driveBottom = drive.PointToScreen(new Point(0, drive.Height)).Y;
+        var paletteTop = palette.PointToScreen(Point.Empty).Y;
+        var paletteBottom = paletteTop + palette.Height;
+        Check(palette.Visible && palette.Parent!.Controls.GetChildIndex(palette) == 0 &&
+            paletteTop >= driveBottom &&
+            paletteBottom > startup.Parent!.PointToScreen(startup.Location).Y + startup.Height,
+            "Палитра целиком разворачивается вниз поверх настроек");
+        Check(palette.Controls.OfType<StudioButton>().All(item => item.Height * 96 >= 34 * item.DeviceDpi),
+            "Кнопки палитры сохраняют высоту при изменении размера окна");
+        Check(!portPicker.Visible && !portPicker.CanSelect && !startup.Visible && !startup.CanSelect,
+            "Перекрытые настройки недоступны, пока палитра открыта");
+    }
+
     private static void CheckLayout(IEnumerable<Control> controls)
     {
+        var status = controls.OfType<Label>().Single(item => item.Name == "ConnectionStatus");
+        var panel = status.Parent!;
+        var startup = controls.OfType<StartupSwitch>().Single();
+        Check(status.TextAlign == ContentAlignment.BottomRight && status.Top >= startup.Bottom
+            && panel.ClientSize.Height - status.Bottom == status.Margin.Bottom
+            && panel.ClientSize.Width - status.Right == status.Margin.Right,
+            $"Статус подключения в углу: {status.Bounds}, контейнер {panel.ClientSize}, отступ {status.Margin}, автозагрузка {startup.Bounds}");
+
         foreach (var control in controls.Where(item => item.Visible && item.Parent is not null))
         {
             var parent = control.Parent!.ClientRectangle;
@@ -259,6 +440,9 @@ internal static class SelfTest
     {
         using var bitmap = new Bitmap(window.Width, window.Height);
         window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+        // DrawToBitmap reverses the sibling order, so print the visible overlay last.
+        if (window.Controls.Find("ColorPalette", searchAllChildren: true).FirstOrDefault() is { Visible: true } palette)
+            palette.DrawToBitmap(bitmap, new Rectangle(palette.PointToScreen(Point.Empty) - (Size)window.Location, palette.Size));
         var start = window.PointToScreen(Point.Empty) - (Size)window.Location;
         using var client = bitmap.Clone(new Rectangle(start, window.ClientSize), bitmap.PixelFormat);
         client.Save(Path.Combine(directory, filename), System.Drawing.Imaging.ImageFormat.Png);

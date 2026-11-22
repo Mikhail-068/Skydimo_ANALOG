@@ -438,7 +438,8 @@ internal sealed class DriveSelector : DashboardInput
     }
 
     public event EventHandler? ValueChanged;
-    public bool IsOn => position != 0;
+    public bool IsNeutral => position == 7;
+    public bool IsOn => position != 0 && !IsNeutral;
     public bool ChoosingColor => position == 3;
     public bool IsMoving => motionClock.IsRunning;
     public event EventHandler? MotionChanged;
@@ -449,7 +450,7 @@ internal sealed class DriveSelector : DashboardInput
         set
         {
             if (IsOn)
-                Position = value == LightMode.Solid ? 1 : 2;
+                Position = value switch { LightMode.Screen => 2, LightMode.Music => 4, LightMode.Magic => 5, LightMode.Chase => 6, _ => 1 };
             else
                 lastMode = value;
         }
@@ -460,14 +461,18 @@ internal sealed class DriveSelector : DashboardInput
         get => position;
         set
         {
-            value = Math.Clamp(value, 0, 3);
+            value = Math.Clamp(value, 0, 7);
             AnimateTo(value);
             if (position == value)
                 return;
 
             position = value;
             if (IsOn)
-                lastMode = position == 2 ? LightMode.Screen : LightMode.Solid;
+                lastMode = position switch
+                {
+                    2 => LightMode.Screen, 4 => LightMode.Music, 5 => LightMode.Magic,
+                    6 => LightMode.Chase, _ => LightMode.Solid
+                };
 
             AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
             ValueChanged?.Invoke(this, EventArgs.Empty);
@@ -479,6 +484,10 @@ internal sealed class DriveSelector : DashboardInput
         1 => new(-1, 1),
         2 => new(1, 1),
         3 => new(-1, 0),
+        4 => new(-1, 2),
+        5 => new(0, 2),
+        6 => new(1, 2),
+        7 => Junction,
         _ => PointF.Empty
     };
 
@@ -546,9 +555,9 @@ internal sealed class DriveSelector : DashboardInput
             Color.FromArgb(23, 29, 36), Color.FromArgb(12, 16, 21), FocusCue ? WindowStyle.Accent : WindowStyle.Border);
 
         var center = Width / 2f;
-        var reach = Math.Min(72 * scale, Width * .22f);
+        var reach = Math.Min(94 * scale, Width * .27f);
         var top = 71 * scale;
-        var bottom = Height - 39 * scale;
+        var bottom = (Height - 39 * scale + top) / 2;
         if (bottom <= top)
             return;
 
@@ -572,10 +581,13 @@ internal sealed class DriveSelector : DashboardInput
         g.DrawLine(inlay, upper, joint);
         g.DrawLine(inlay, palette, left);
         g.DrawLine(inlay, left, right);
+        g.DrawLine(inlay, left, Map(Detent(4)));
+        g.DrawLine(inlay, joint, Map(Detent(5)));
+        g.DrawLine(inlay, right, Map(Detent(6)));
 
         using var rings = new Pen(Color.FromArgb(95, 107, 118), scale);
         using var activeRing = new Pen(highlighted == 1 ? Color.FromArgb(255, 201, 120) : Color.FromArgb(255, 198, 112), 1.5f * scale);
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 8; i++)
         {
             var detent = Map(Detent(i));
             var ring = new RectangleF(detent.X - 7 * scale, detent.Y - 7 * scale, 14 * scale, 14 * scale);
@@ -592,13 +604,23 @@ internal sealed class DriveSelector : DashboardInput
         TextRenderer.DrawText(g, "Цвет", Font,
             Rectangle.Round(new RectangleF(palette.X - 36 * scale, 8 * scale, 72 * scale, 18 * scale)),
             highlighted == 3 ? WindowStyle.Accent : WindowStyle.Muted, flags);
+        TextRenderer.DrawText(g, "N", Font,
+            Rectangle.Round(new RectangleF(joint.X - 15 * scale, joint.Y + 10 * scale, 30 * scale, 19 * scale)),
+            highlighted == 7 ? WindowStyle.Accent : WindowStyle.Muted, flags);
         var half = Width / 2;
         TextRenderer.DrawText(g, "Один цвет", Font,
-            new Rectangle(4, (int)(Height - 24 * scale), half - 8, (int)(19 * scale)),
+            new Rectangle(4, (int)(bottom + 10 * scale), half - 8, (int)(19 * scale)),
             highlighted == 1 ? WindowStyle.Accent : WindowStyle.Muted, flags);
         TextRenderer.DrawText(g, "Цвета экрана", Font,
-            new Rectangle(half + 4, (int)(Height - 24 * scale), Width - half - 8, (int)(19 * scale)),
+            new Rectangle(half + 4, (int)(bottom + 10 * scale), Width - half - 8, (int)(19 * scale)),
             highlighted == 2 ? WindowStyle.Accent : WindowStyle.Muted, flags);
+        for (var i = 4; i <= 6; i++)
+        {
+            var detent = Map(Detent(i));
+            TextRenderer.DrawText(g, ModeName(i), Font,
+                Rectangle.Round(new RectangleF(detent.X - reach * .52f, Height - 23 * scale, reach * 1.04f, 19 * scale)),
+                highlighted == i ? WindowStyle.Accent : WindowStyle.Muted, flags);
+        }
     }
 
     private static void DrawGearLever(Graphics g, PointF pivot, float scale, bool engaged)
@@ -633,15 +655,22 @@ internal sealed class DriveSelector : DashboardInput
 
     private int Choose(int x, int y)
     {
-        if (y < Height * .48f)
+        var scale = DeviceDpi / 96f;
+        var reach = Math.Min(94 * scale, Width * .27f);
+        var middle = (Height + 32 * scale) / 2;
+        var lower = Height - 39 * scale;
+        if (y >= (middle + lower) / 2)
+            return x < Width / 2f - reach / 2 ? 4 : x > Width / 2f + reach / 2 ? 6 : 5;
+
+        if (y < (71 * scale + middle) / 2)
         {
-            var paletteBoundary = Width / 2f - Math.Min(72 * DeviceDpi / 96f, Width * .22f) / 2;
+            var paletteBoundary = Width / 2f - Math.Min(94 * DeviceDpi / 96f, Width * .27f) / 2;
             return (position is 1 or 3) && x < paletteBoundary ? 3 : 0;
         }
 
         var center = Width / 2;
-        if (Math.Abs(x - center) <= 6 * DeviceDpi / 96)
-            return Mode == LightMode.Solid ? 1 : 2;
+        if (Math.Abs(x - center) <= reach / 2)
+            return 7;
 
         return x < center ? 1 : 2;
     }
@@ -695,7 +724,8 @@ internal sealed class DriveSelector : DashboardInput
             case Keys.Up: Position = position == 1 ? 3 : 0; break;
             case Keys.Left: Position = 1; break;
             case Keys.Right: Position = 2; break;
-            case Keys.Down: Position = Mode == LightMode.Solid ? 1 : 2; break;
+            case Keys.Down: Position = position switch { 1 or 3 => 4, 2 => 6, 4 => 5, 5 => 6, 6 => 4, 7 => 5, _ => 7 }; break;
+            case Keys.N: Position = 7; break;
             default: return;
         }
         e.Handled = true;
@@ -711,17 +741,27 @@ internal sealed class DriveSelector : DashboardInput
         base.Dispose(disposing);
     }
 
+    private static string ModeName(int value) => value switch
+    {
+        0 => "Выключено", 1 => "Один цвет", 2 => "Цвета экрана", 3 => "Выбор цвета",
+        4 => "Музыка", 5 => "Волшебный", 6 => "Бегущие огни", 7 => "Нейтраль N", _ => ""
+    };
+
     private sealed class DriveAccess(DriveSelector owner) : ControlAccessibleObject(owner)
     {
         public override string? Value
         {
-            get => owner.Position switch { 0 => "Выключено", 1 => "Один цвет", 2 => "Цвета экрана", _ => "Выбор цвета" };
+            get => ModeName(owner.Position);
             set
             {
                 if (value == "Выключено") owner.Position = 0;
                 else if (value == "Один цвет") owner.Position = 1;
                 else if (value == "Цвета экрана") owner.Position = 2;
                 else if (value == "Выбор цвета" && owner.Position is 1 or 3) owner.Position = 3;
+                else if (value == "Музыка") owner.Position = 4;
+                else if (value == "Волшебный") owner.Position = 5;
+                else if (value == "Бегущие огни") owner.Position = 6;
+                else if (value == "Нейтраль N") owner.Position = 7;
             }
         }
     }

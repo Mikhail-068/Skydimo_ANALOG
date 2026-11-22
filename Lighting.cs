@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Kontur;
 
-internal enum LightMode { Solid, Screen }
+internal enum LightMode { Solid, Screen, Music, Magic, Chase }
 
 internal readonly record struct Rgb(byte Red, byte Green, byte Blue)
 {
@@ -60,7 +60,7 @@ internal static class Sk0127
 
 internal sealed record LightSettings
 {
-    public string Port { get; init; } = "COM12";
+    public string? PreferredPort { get; init; }
     public string Monitor { get; init; } = "";
     public int Brightness { get; init; } = 44;
     public int ColorArgb { get; init; } = Color.FromArgb(154, 242, 120).ToArgb();

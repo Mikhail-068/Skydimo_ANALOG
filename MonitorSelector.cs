@@ -11,6 +11,7 @@ internal sealed class MonitorSelector : UserControl
     private Screen[] displays = [];
     private DisplayButton[] buttons = [];
     public Screen? SelectedDisplay { get; private set; }
+    public string? PreferredDisplay { get; private set; }
     public event EventHandler? SelectionChanged;
 
     public MonitorSelector()
@@ -49,7 +50,13 @@ internal sealed class MonitorSelector : UserControl
         Disposed += (_, _) => glowTimer.Dispose();
     }
 
-    public void RefreshDisplays(string? preferred)
+    public void RestoreDisplay(string? preferred)
+    {
+        PreferredDisplay = string.IsNullOrWhiteSpace(preferred) ? null : preferred;
+        RefreshDisplays();
+    }
+
+    public void RefreshDisplays()
     {
         var current = Screen.AllScreens;
         if (current.Length == displays.Length && current.Zip(displays).All(pair =>
@@ -67,17 +74,23 @@ internal sealed class MonitorSelector : UserControl
         buttons = displays.Select((screen, index) =>
         {
             var button = new DisplayButton(screen, index + 1);
-            button.Click += (_, _) => SelectDisplay(button.Screen);
+            button.Click += (_, _) =>
+            {
+                PreferredDisplay = button.Screen.DeviceName;
+                UpdateSelection(button.Screen);
+            };
             return button;
         }).ToArray();
         scheme.Controls.AddRange(buttons);
         ArrangeDisplays();
         scheme.ResumeLayout();
-        SelectDisplay(displays.FirstOrDefault(screen => screen.DeviceName == preferred)
-            ?? displays.FirstOrDefault(screen => screen.Primary) ?? displays.FirstOrDefault());
+        var selected = PreferredDisplay is null
+            ? displays.FirstOrDefault(screen => screen.Primary) ?? displays.FirstOrDefault()
+            : displays.FirstOrDefault(screen => screen.DeviceName == PreferredDisplay);
+        UpdateSelection(selected);
     }
 
-    private void SelectDisplay(Screen? screen)
+    private void UpdateSelection(Screen? screen)
     {
         var previous = SelectedDisplay;
         SelectedDisplay = screen;
@@ -86,7 +99,7 @@ internal sealed class MonitorSelector : UserControl
         if (Visible)
             StartGlow();
         details.Visible = screen is null;
-        details.Text = "Мониторы не найдены";
+        details.Text = PreferredDisplay is null ? "Мониторы не найдены" : "Выбранный монитор недоступен";
         if (screen?.DeviceName != previous?.DeviceName || screen?.Bounds != previous?.Bounds)
             SelectionChanged?.Invoke(this, EventArgs.Empty);
     }

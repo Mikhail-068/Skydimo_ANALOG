@@ -3,3 +3,6 @@ obj/
 release/
 release-*/
 .check/
+.dotnet/
+NuGet/
+desktop.ini

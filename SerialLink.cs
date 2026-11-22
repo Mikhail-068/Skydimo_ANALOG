@@ -8,6 +8,7 @@ namespace Kontur;
 
 internal sealed class SerialLink : IDisposable
 {
+    internal const string Automatic = "auto";
     private readonly SafeFileHandle handle;
 
     private SerialLink(SafeFileHandle handle) => this.handle = handle;
@@ -32,12 +33,28 @@ internal sealed class SerialLink : IDisposable
         using var devices = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\USB\VID_1A86&PID_7523");
         if (devices is null) return [];
         var available = Ports();
-        return devices.GetSubKeyNames().Select(id =>
+        var controllerPorts = devices.GetSubKeyNames().Select(id =>
         {
             using var parameters = devices.OpenSubKey(id + @"\Device Parameters");
             return parameters?.GetValue("PortName") as string;
-        }).OfType<string>().Where(port => available.Contains(port, StringComparer.OrdinalIgnoreCase))
-          .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return available.Where(controllerPorts.Contains).ToArray();
+    }
+
+    internal static string SelectControllerPort(string selection, string[] candidates)
+    {
+        if (!string.Equals(selection, Automatic, StringComparison.OrdinalIgnoreCase))
+        {
+            return candidates.FirstOrDefault(port => string.Equals(port, selection, StringComparison.OrdinalIgnoreCase))
+                ?? throw new IOException($"{selection} недоступен. Проверь USB или выбери другой порт.");
+        }
+
+        return candidates.Length switch
+        {
+            1 => candidates[0],
+            0 => throw new IOException("Контроллер CH340 не найден. Проверь USB."),
+            _ => throw new IOException("Найдено несколько CH340. Выбери COM-порт контроллера.")
+        };
     }
 
     public static SerialLink Connect(string port, CancellationToken stop)

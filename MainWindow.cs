@@ -7,6 +7,8 @@ internal sealed class MainWindow : Form
     private readonly LocalFiles files;
     private readonly LightingEngine engine;
     private readonly bool backgroundPreview;
+    private readonly Func<string[]> controllerPorts;
+    private readonly WindowsStartup startup;
 
     private readonly MonitorSelector monitor = new();
     private Form? monitorPanel;
@@ -34,7 +36,9 @@ internal sealed class MainWindow : Form
         UnlitGlass = (Color.FromArgb(81, 30, 35), Color.FromArgb(34, 12, 16), Color.FromArgb(125, 54, 59))
     };
     private readonly Label status = Label("", 9, color: Muted);
-    private readonly Label captureStatus = Label("", 9, color: Muted);
+    private readonly ControllerPicker portPicker = new();
+    private readonly StartupSwitch startupSwitch = new();
+    private const int PaletteHeight = 194;
     private readonly TableLayoutPanel colors = Table(3);
 
     private readonly LedPreview preview = new();
@@ -46,28 +50,32 @@ internal sealed class MainWindow : Form
     private int? paletteSlot;
     private StudioButton? customColor;
     private int displayRefresh;
-    private string savedPort = "COM12";
+    private string? preferredPort;
 
-    public MainWindow(LocalFiles files, bool backgroundPreview = false)
+    public MainWindow(LocalFiles files, bool backgroundPreview = false, Func<string[]>? controllerPorts = null,
+        WindowsStartup? startup = null)
     {
         this.files = files;
         this.backgroundPreview = backgroundPreview;
+        this.controllerPorts = controllerPorts ?? SerialLink.ControllerPorts;
+        this.startup = startup ?? new();
         var settings = files.Load();
         SuspendLayout();
         Text = "Контур — подсветка SK0127";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(1060, 650);
-        MinimumSize = new Size(900, 648);
+        ClientSize = new Size(1060, 720);
+        MinimumSize = new Size(900, 718);
         BackColor = Background;
         ForeColor = WindowStyle.Text;
         Font = new Font("Segoe UI", 10);
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
 
         Controls.Add(BuildLayout());
-        monitor.RefreshDisplays(settings.Monitor);
-        savedPort = settings.Port;
+        monitor.RestoreDisplay(settings.Monitor);
+        preferredPort = SerialLink.IsPort(settings.PreferredPort) ? settings.PreferredPort!.ToUpperInvariant() : null;
+        RefreshPortChoices();
         brightness.Value = settings.Brightness;
         drive.Mode = settings.Mode;
         reverse.Checked = settings.Reverse;
@@ -79,6 +87,7 @@ internal sealed class MainWindow : Form
         paletteSlot = settings.PaletteSlot;
 
         engine = new LightingEngine(Current(), files);
+        ReadStartup();
         BindActions();
         UpdatePresentation();
         RefreshPreview();
@@ -180,31 +189,45 @@ internal sealed class MainWindow : Form
     private Control BuildSettings()
     {
         var card = new Card { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(18, 15, 18, 14) };
-        var content = Table(1);
+        var content = new SettingsSurface(drive);
         AddRow(content, Label("Подсветка", 14, true), 30);
         AddRow(content, powerState, 22);
-        AddRow(content, drive, 155);
+        AddRow(content, drive, 225);
 
         screenSettings.BackColor = Field;
         screenSettings.Padding = new Padding(9, 0, 9, 0);
 
         AddRow(screenSettings, reverse, 28);
-        content.Paint += (_, e) =>
-        {
-            var bounds = RectangleF.FromLTRB(.5f, drive.Bottom + 1, content.ClientSize.Width - .5f,
-                content.ClientSize.Height - .5f);
-            DrawDashboardPlastic(e.Graphics, bounds, content.DeviceDpi / 96f, shadeOpacity: 38);
-        };
         var details = new Panel { Margin = new Padding(0, 12, 0, 0), BackColor = Color.Transparent };
-        captureStatus.BackColor = Color.Transparent;
-        status.BackColor = Color.Transparent;
         details.Controls.Add(screenSettings);
-        details.Controls.Add(colors);
-        AddRow(content, details, 183);
-        AddRow(content, captureStatus, 22);
-        AddRow(content, status, 40);
+        AddRow(content, details, 107);
+
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 63));
+        content.Controls.Add(portPicker, 0, content.RowCount++);
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        content.Controls.Add(startupSwitch, 0, content.RowCount++);
         AddSpace(content);
-        card.Controls.Add(content);
+        status.Name = "ConnectionStatus";
+        status.BackColor = Color.Transparent;
+        status.TextAlign = ContentAlignment.BottomRight;
+        status.Margin = new Padding(3, 0, 16, 7);
+        AddRow(content, status, 38);
+        var layers = new Panel { Dock = DockStyle.Fill };
+        layers.Controls.Add(content);
+        colors.Dock = DockStyle.None;
+        layers.Controls.Add(colors);
+        colors.BringToFront();
+
+        void PositionPalette(object? sender, EventArgs e)
+        {
+            var height = (int)Math.Round(PaletteHeight * details.DeviceDpi / 96f);
+            colors.SetBounds(details.Left, details.Top, details.Width, height);
+        }
+
+        details.LocationChanged += PositionPalette;
+        details.SizeChanged += PositionPalette;
+        details.DpiChangedAfterParent += PositionPalette;
+        card.Controls.Add(layers);
         return card;
     }
 
@@ -273,6 +296,15 @@ internal sealed class MainWindow : Form
             Changed();
         };
         brightness.ValueChanged += (_, _) => Changed();
+        startupSwitch.CheckedChanged += StartupChanged;
+        portPicker.Opening += (_, _) => RefreshPortChoices();
+        portPicker.SelectionChanged += (_, _) =>
+        {
+            if (portPicker.Selection is not { } choice)
+                return;
+            preferredPort = choice.Port;
+            Changed();
+        };
         BuildPalette();
         refresh.Tick += (_, _) => RefreshPreview();
         save.Tick += (_, _) => SaveSettings();
@@ -327,7 +359,7 @@ internal sealed class MainWindow : Form
             return;
         }
 
-        monitor.RefreshDisplays(monitor.SelectedDisplay?.DeviceName);
+        monitor.RefreshDisplays();
         monitorSlideProgress = backgroundPreview ? 1 : 0;
         PositionMonitorPanel();
         monitorPanel.Show(this);
@@ -411,14 +443,59 @@ internal sealed class MainWindow : Form
         }
     }
 
+    private void ReadStartup()
+    {
+        try { startupSwitch.Checked = startup.IsEnabled(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            files.Log("Не удалось прочитать параметры автозагрузки. " + ex.Message);
+            startupSwitch.Enabled = false;
+            startupSwitch.AccessibleDescription = "Не удалось прочитать параметры автозагрузки Windows";
+        }
+    }
+
+    private void StartupChanged(object? sender, EventArgs e)
+    {
+        try { startup.SetEnabled(startupSwitch.Checked); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            startupSwitch.CheckedChanged -= StartupChanged;
+            startupSwitch.Checked = !startupSwitch.Checked;
+            startupSwitch.CheckedChanged += StartupChanged;
+            files.Log("Не удалось изменить автозагрузку. " + ex.Message);
+            if (!backgroundPreview)
+                MessageBox.Show(this, ex is IOException ? ex.Message : "Windows не разрешила изменить автозагрузку.",
+                    "Автозагрузка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void RefreshPortChoices()
+    {
+        string[] ports;
+        try { ports = controllerPorts(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            files.Log($"Не удалось получить список COM-портов. {ex.Message}");
+            ports = [];
+        }
+
+        var choices = new List<ControllerPicker.Option> { new(null, "Авто") };
+        choices.AddRange(ports.Select(port => new ControllerPicker.Option(port, port)));
+        if (preferredPort is not null && !ports.Contains(preferredPort, StringComparer.OrdinalIgnoreCase))
+            choices.Add(new(preferredPort, $"{preferredPort} (нет связи)"));
+
+        if (!portPicker.Options.SequenceEqual(choices))
+            portPicker.ResetOptions(choices, preferredPort);
+    }
+
     private LightingInput Current()
     {
-        var selected = monitor.SelectedDisplay ?? Screen.PrimaryScreen;
+        var selected = monitor.SelectedDisplay;
 
         return new LightingInput(new LightSettings
         {
-            Port = savedPort,
-            Monitor = selected?.DeviceName ?? "",
+            PreferredPort = preferredPort,
+            Monitor = monitor.PreferredDisplay ?? selected?.DeviceName ?? "",
             Brightness = brightness.Value,
             ColorArgb = color.ToArgb(),
             PaletteOverrides = paletteOverrides.Count == 0 ? null : new Dictionary<int, int>(paletteOverrides),
@@ -426,30 +503,47 @@ internal sealed class MainWindow : Form
             Mode = drive.Mode,
             StripPath = preview.StripPath,
             Reverse = reverse.Checked
-        }, selected?.Bounds ?? Rectangle.Empty, drive.IsOn, drive.IsOn && !backgroundPreview ? "auto" : null);
+        }, selected?.Bounds ?? Rectangle.Empty, drive.IsOn, drive.IsOn && !backgroundPreview ? preferredPort ?? SerialLink.Automatic : null);
     }
 
     private void UpdatePresentation()
     {
-        colors.Visible = drive.ChoosingColor;
+        var choosingColor = drive.ChoosingColor;
+        if (choosingColor && portPicker.IsOpen)
+            portPicker.ClosePorts();
+        portPicker.Visible = startupSwitch.Visible = !choosingColor;
+        colors.Visible = choosingColor;
         screenSettings.Visible = drive.IsOn && drive.Mode == LightMode.Screen;
         brightnessValue.Text = $"{brightness.Value} %";
-        powerState.Text = drive.ChoosingColor ? "Выбор цвета" : drive.IsOn ? "Включена" : "Выключена";
+        powerState.Text = drive.ChoosingColor ? "Выбор цвета" : drive.IsOn ? drive.Mode switch
+        {
+            LightMode.Music => "Музыкальный режим",
+            LightMode.Magic => "Цветовая волна",
+            LightMode.Chase => "Бегущие огни",
+            _ => "Включена"
+        } : drive.IsNeutral ? "Нейтраль" : "Выключена";
 
     }
 
     private void RefreshPreview()
     {
         if (++displayRefresh % 10 == 0)
-            monitor.RefreshDisplays(monitor.SelectedDisplay?.DeviceName);
+            monitor.RefreshDisplays();
         preview.SetFrame(engine.Preview);
         var link = engine.Status;
         var screenMode = drive.Mode == LightMode.Screen;
         var modeStatus = !drive.IsOn ? "Выключено" : !link.Connected ? "Поиск контроллера" : "Подключено";
-        badge.UpdateStatus(modeStatus, link.Connected, drive.IsOn && !screenMode);
+        badge.UpdateStatus(modeStatus, link.Connected, drive.IsOn && drive.Mode == LightMode.Solid);
         screenLamp.UpdateStatus(modeStatus, link.Connected, drive.IsOn && screenMode);
-        status.Text = drive.IsOn && !link.Connected ? link.Message : "";
-        captureStatus.Text = drive.Mode == LightMode.Screen ? engine.CaptureError ?? "" : "";
+        var connection = drive.IsOn ? link.Message : "";
+        var captureError = drive.Mode switch
+        {
+            LightMode.Screen => engine.CaptureError,
+            LightMode.Music => engine.AudioError,
+            _ => null
+        };
+        status.Text = captureError is null ? connection :
+            connection.Length == 0 ? captureError : $"{captureError}{Environment.NewLine}{connection}";
     }
 
     private void BuildPalette()
