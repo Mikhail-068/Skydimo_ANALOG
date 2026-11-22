@@ -39,7 +39,13 @@ internal sealed class MainWindow : Form
     private readonly ControllerPicker portPicker = new();
     private readonly StartupSwitch startupSwitch = new();
     private const int PaletteHeight = 194;
+    private readonly Panel settingsDetails = new() { Margin = new Padding(0, 12, 0, 0), BackColor = Color.Transparent };
+    private readonly Panel paletteViewport = new() { Visible = false };
     private readonly TableLayoutPanel colors = Table(3);
+    private readonly System.Windows.Forms.Timer paletteSlide = new() { Interval = 15 };
+    private readonly System.Diagnostics.Stopwatch paletteSlideClock = new();
+    private double paletteSlideFrom;
+    private bool paletteOpen;
 
     private readonly LedPreview preview = new();
     private readonly TableLayoutPanel screenSettings = Table(1);
@@ -198,9 +204,8 @@ internal sealed class MainWindow : Form
         screenSettings.Padding = new Padding(9, 0, 9, 0);
 
         AddRow(screenSettings, reverse, 28);
-        var details = new Panel { Margin = new Padding(0, 12, 0, 0), BackColor = Color.Transparent };
-        details.Controls.Add(screenSettings);
-        AddRow(content, details, 107);
+        settingsDetails.Controls.Add(screenSettings);
+        AddRow(content, settingsDetails, 107);
 
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 63));
         content.Controls.Add(portPicker, 0, content.RowCount++);
@@ -215,18 +220,13 @@ internal sealed class MainWindow : Form
         var layers = new Panel { Dock = DockStyle.Fill };
         layers.Controls.Add(content);
         colors.Dock = DockStyle.None;
-        layers.Controls.Add(colors);
-        colors.BringToFront();
+        paletteViewport.Controls.Add(colors);
+        layers.Controls.Add(paletteViewport);
+        paletteViewport.BringToFront();
 
-        void PositionPalette(object? sender, EventArgs e)
-        {
-            var height = (int)Math.Round(PaletteHeight * details.DeviceDpi / 96f);
-            colors.SetBounds(details.Left, details.Top, details.Width, height);
-        }
-
-        details.LocationChanged += PositionPalette;
-        details.SizeChanged += PositionPalette;
-        details.DpiChangedAfterParent += PositionPalette;
+        settingsDetails.LocationChanged += (_, _) => PositionPalette();
+        settingsDetails.SizeChanged += (_, _) => PositionPalette();
+        settingsDetails.DpiChangedAfterParent += (_, _) => PositionPalette();
         card.Controls.Add(layers);
         return card;
     }
@@ -262,6 +262,7 @@ internal sealed class MainWindow : Form
             colorLamp.UpdateStatus(choosing ? "Выбор цвета" : "Выбор цвета закрыт", choosing, choosing);
             Changed();
         };
+        paletteSlide.Tick += (_, _) => AdvancePalette();
         monitor.SelectionChanged += (_, _) => Changed();
         preview.MonitorChoice.Click += (_, _) => ToggleMonitorPanel();
         monitorSlide.Tick += (_, _) =>
@@ -280,6 +281,7 @@ internal sealed class MainWindow : Form
         };
         Disposed += (_, _) =>
         {
+            paletteSlide.Dispose();
             monitorSlide.Dispose();
             monitorPanel?.Dispose();
             if (!monitor.IsDisposed)
@@ -506,13 +508,63 @@ internal sealed class MainWindow : Form
         }, selected?.Bounds ?? Rectangle.Empty, drive.IsOn, drive.IsOn && !backgroundPreview ? preferredPort ?? SerialLink.Automatic : null);
     }
 
+    private void SetPaletteOpen(bool open)
+    {
+        if (paletteOpen == open)
+            return;
+
+        paletteSlideFrom = PalettePosition();
+        paletteOpen = open;
+        if (open)
+        {
+            if (portPicker.IsOpen)
+                portPicker.ClosePorts();
+            portPicker.Visible = startupSwitch.Visible = false;
+        }
+        colors.Enabled = open;
+        paletteSlideClock.Restart();
+        AdvancePalette();
+        if (paletteSlideClock.IsRunning)
+            paletteSlide.Start();
+    }
+
+    private double PalettePosition()
+    {
+        if (!paletteSlideClock.IsRunning)
+            return paletteOpen ? 1 : 0;
+
+        var elapsed = paletteSlideClock.Elapsed.TotalMilliseconds;
+        return Math.Clamp(paletteSlideFrom + (paletteOpen ? elapsed / 280 : -elapsed / 230), 0, 1);
+    }
+
+    private void AdvancePalette()
+    {
+        PositionPalette();
+        if (PalettePosition() != (paletteOpen ? 1 : 0))
+            return;
+
+        paletteSlide.Stop();
+        paletteSlideClock.Stop();
+        PositionPalette();
+        if (!paletteOpen)
+            portPicker.Visible = startupSwitch.Visible = true;
+    }
+
+    private void PositionPalette()
+    {
+        var position = PalettePosition();
+        var eased = position * position * (3 - 2 * position);
+        var height = (int)Math.Round(PaletteHeight * settingsDetails.DeviceDpi / 96f);
+        var shown = (int)Math.Round(height * eased);
+        // Clip the translation while keeping the palette grid at full height.
+        colors.SetBounds(0, shown - height, settingsDetails.Width, height);
+        paletteViewport.SetBounds(settingsDetails.Left, settingsDetails.Top, settingsDetails.Width, shown);
+        paletteViewport.Visible = shown > 0;
+    }
+
     private void UpdatePresentation()
     {
-        var choosingColor = drive.ChoosingColor;
-        if (choosingColor && portPicker.IsOpen)
-            portPicker.ClosePorts();
-        portPicker.Visible = startupSwitch.Visible = !choosingColor;
-        colors.Visible = choosingColor;
+        SetPaletteOpen(drive.ChoosingColor);
         screenSettings.Visible = drive.IsOn && drive.Mode == LightMode.Screen;
         brightnessValue.Text = $"{brightness.Value} %";
         powerState.Text = drive.ChoosingColor ? "Выбор цвета" : drive.IsOn ? drive.Mode switch

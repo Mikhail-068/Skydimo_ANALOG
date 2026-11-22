@@ -239,7 +239,23 @@ internal static class SelfTest
             Check(slider.FindForm() == window && preview.Contains(slider), "Регулятор яркости находится под предпросмотром");
             drive.AccessibilityObject.Value = "Один цвет";
             drive.AccessibilityObject.Value = "Выбор цвета";
-            PumpWindow();
+            PumpWindow(100);
+            var viewport = palette.Parent!;
+            var fullHeight = palette.Height;
+            var partialHeight = viewport.Height;
+            Check(partialHeight > 0 && partialHeight < fullHeight && palette.Bottom == partialHeight,
+                "Палитра плавно выезжает, сохраняя высоту");
+            drive.AccessibilityObject.Value = "Один цвет";
+            Check(viewport.Visible && !portPicker.Visible && !toggle.Visible,
+                "Быстрый возврат разворачивает движение без скрытия палитры");
+            PumpWindow(40);
+            var retractingHeight = viewport.Height;
+            Check(retractingHeight > 0 && retractingHeight < partialHeight && palette.Height == fullHeight,
+                "Палитра задвигается от текущего положения");
+            drive.AccessibilityObject.Value = "Выбор цвета";
+            Check(viewport.Height > 0 && viewport.Height < fullHeight,
+                "Повторный выезд начинается с текущего положения");
+            PumpWindow(360);
             Check(drive.ChoosingColor && drive.IsOn && palette.Visible &&
                 palette.Controls.OfType<StudioButton>().Any(item => item.Text == "Другой цвет…"), "Палитра на левой ветке");
             CheckPaletteLayout(palette, drive, portPicker, toggle);
@@ -266,7 +282,10 @@ internal static class SelfTest
             Check(files.Load().ColorArgb == editedShade.ToArgb(), "Повторное нажатие применяет отредактированный оттенок");
             CaptureWindow(window, folder, "palette.png");
             drive.AccessibilityObject.Value = "Один цвет";
-            PumpWindow();
+            PumpWindow(100);
+            Check(viewport.Visible && viewport.Height < palette.Height && !portPicker.Visible && !toggle.Visible,
+                "Нижние настройки ждут окончания плавного закрытия");
+            PumpWindow(240);
             Check(!palette.Visible && files.Load().ColorArgb == editedShade.ToArgb(), "Выход сохраняет оттенок");
             Check(portPicker.Visible && portPicker.CanSelect && toggle.Visible && toggle.CanSelect,
                 "После закрытия палитры USB-контроллер и автозагрузка снова доступны");
@@ -333,12 +352,12 @@ internal static class SelfTest
             Check(drive.Mode == LightMode.Screen && !palette.Visible, "Правая ветка не открывает палитру");
             drive.AccessibilityObject.Value = "Один цвет";
             drive.AccessibilityObject.Value = "Выбор цвета";
-            PumpWindow();
+            PumpWindow(360);
             CheckPaletteLayout(palette, drive, portPicker, toggle);
             CheckLayout(controls);
             CaptureWindow(window, folder, "palette-min.png");
             drive.AccessibilityObject.Value = "Цвета экрана";
-            PumpWindow();
+            PumpWindow(320);
             Check(!palette.Visible && portPicker.Visible && toggle.Visible,
                 "В минимальном окне настройки возвращаются после закрытия палитры");
 
@@ -398,8 +417,9 @@ internal static class SelfTest
         var driveBottom = drive.PointToScreen(new Point(0, drive.Height)).Y;
         var paletteTop = palette.PointToScreen(Point.Empty).Y;
         var paletteBottom = paletteTop + palette.Height;
-        Check(palette.Visible && palette.Parent!.Controls.GetChildIndex(palette) == 0 &&
-            paletteTop >= driveBottom &&
+        var viewport = palette.Parent!;
+        Check(palette.Visible && viewport.Parent!.Controls.GetChildIndex(viewport) == 0 &&
+            palette.Height == viewport.Height && paletteTop >= driveBottom &&
             paletteBottom > startup.Parent!.PointToScreen(startup.Location).Y + startup.Height,
             "Палитра целиком разворачивается вниз поверх настроек");
         Check(palette.Controls.OfType<StudioButton>().All(item => item.Height * 96 >= 34 * item.DeviceDpi),
@@ -441,8 +461,8 @@ internal static class SelfTest
         using var bitmap = new Bitmap(window.Width, window.Height);
         window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
         // DrawToBitmap reverses the sibling order, so print the visible overlay last.
-        if (window.Controls.Find("ColorPalette", searchAllChildren: true).FirstOrDefault() is { Visible: true } palette)
-            palette.DrawToBitmap(bitmap, new Rectangle(palette.PointToScreen(Point.Empty) - (Size)window.Location, palette.Size));
+        if (window.Controls.Find("ColorPalette", searchAllChildren: true).FirstOrDefault()?.Parent is { Visible: true } viewport)
+            viewport.DrawToBitmap(bitmap, new Rectangle(viewport.PointToScreen(Point.Empty) - (Size)window.Location, viewport.Size));
         var start = window.PointToScreen(Point.Empty) - (Size)window.Location;
         using var client = bitmap.Clone(new Rectangle(start, window.ClientSize), bitmap.PixelFormat);
         client.Save(Path.Combine(directory, filename), System.Drawing.Imaging.ImageFormat.Png);
